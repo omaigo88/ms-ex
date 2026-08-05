@@ -1,15 +1,20 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"net"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 
-	inventoryService "github.com/student/inventory/pkg/service"
-	inventoryv1 "github.com/student/shared/pkg/proto/inventory/v1"
+	inventoryService "github.com/omaigo88/inventory/pkg/service"
+	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
 )
 
 const grpcAddress = ":50051"
@@ -21,23 +26,32 @@ func main() {
 		os.Exit(1)
 	}
 
-	// TODO: Настроить gRPC сервер с параметрами keepalive
-	// Подумайте, какие параметры стоит задать для production-ready сервера
-	// См. examples/week_1/GRPC_CONNECTIONS.md
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionIdle: 15 * time.Minute,
+			Time:              2 * time.Hour,
+			Timeout:           20 * time.Second,
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             1 * time.Minute,
+			PermitWithoutStream: true,
+		}),
+	)
 	inventoryv1.RegisterInventoryServiceServer(grpcServer, inventoryService.NewServer())
 
 	// Включаем reflection для postman/grpcurl
 	reflection.Register(grpcServer)
 
-	slog.Info("запуск InventoryService", "адрес", grpcAddress)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	// TODO: Реализовать graceful shutdown
-	// При получении сигнала SIGINT/SIGTERM сервер должен:
-	// 1. Перестать принимать новые соединения
-	// 2. Дождаться завершения текущих запросов
-	// 3. Корректно завершить работу
-	// Подсказка: используйте signal.NotifyContext и grpcServer.GracefulStop()
+	go func() {
+		<-ctx.Done()
+		slog.Info("получен сигнал завершения, останавливаем InventoryService")
+		grpcServer.GracefulStop()
+	}()
+
+	slog.Info("запуск InventoryService", "адрес", grpcAddress)
 
 	err = grpcServer.Serve(lis)
 	if err != nil {

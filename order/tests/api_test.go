@@ -32,12 +32,12 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	inventoryService "github.com/student/inventory/pkg/service"
-	orderHandler "github.com/student/order/pkg/handler"
-	"github.com/student/order/tests/testutil"
-	paymentService "github.com/student/payment/pkg/service"
-	inventoryv1 "github.com/student/shared/pkg/proto/inventory/v1"
-	paymentv1 "github.com/student/shared/pkg/proto/payment/v1"
+	inventoryService "github.com/omaigo88/inventory/pkg/service"
+	orderHandler "github.com/omaigo88/order/pkg/handler"
+	"github.com/omaigo88/order/tests/testutil"
+	paymentService "github.com/omaigo88/payment/pkg/service"
+	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
+	paymentv1 "github.com/omaigo88/shared/pkg/proto/payment/v1"
 )
 
 // Предзагруженные UUID и цены деталей (из inventory/cmd/main.go)
@@ -83,6 +83,11 @@ func payBufDialer(context.Context, string) (net.Conn, error) {
 // orderBaseURL возвращает базовый URL для HTTP тестов заказов
 func orderBaseURL() string {
 	return ts.URL
+}
+
+// strPtr возвращает указатель на переданную строку
+func strPtr(s string) *string {
+	return &s
 }
 
 // TestMain запускает все сервисы перед тестами и останавливает после
@@ -627,8 +632,8 @@ func TestOrder_Create_Success_AllParts(t *testing.T) {
 	req := &CreateOrderRequest{
 		HullUUID:   HullTitaniumUUID,
 		EngineUUID: EngineIonBUUID,
-		ShieldUUID: new(ShieldEnergyUUID),
-		WeaponUUID: new(WeaponLaserUUID),
+		ShieldUUID: strPtr(ShieldEnergyUUID),
+		WeaponUUID: strPtr(WeaponLaserUUID),
 	}
 
 	result, resp := createOrder(t, req)
@@ -683,7 +688,7 @@ func TestOrder_Create_ShieldNotFound(t *testing.T) {
 	req := &CreateOrderRequest{
 		HullUUID:   HullAluminumUUID,
 		EngineUUID: EngineIonCUUID,
-		ShieldUUID: new(uuid.New().String()),
+		ShieldUUID: strPtr(uuid.New().String()),
 	}
 
 	_, resp := createOrder(t, req)
@@ -696,7 +701,7 @@ func TestOrder_Create_WeaponNotFound(t *testing.T) {
 	req := &CreateOrderRequest{
 		HullUUID:   HullAluminumUUID,
 		EngineUUID: EngineIonCUUID,
-		WeaponUUID: new(uuid.New().String()),
+		WeaponUUID: strPtr(uuid.New().String()),
 	}
 
 	_, resp := createOrder(t, req)
@@ -945,7 +950,7 @@ func TestOrder_Create_WithWeaponOnly(t *testing.T) {
 	req := &CreateOrderRequest{
 		HullUUID:   HullAluminumUUID,
 		EngineUUID: EngineIonCUUID,
-		WeaponUUID: new(WeaponLaserUUID),
+		WeaponUUID: strPtr(WeaponLaserUUID),
 	}
 
 	result, resp := createOrder(t, req)
@@ -1034,7 +1039,7 @@ func TestOrder_FullLifecycle_CreatePayGet(t *testing.T) {
 	createReq := &CreateOrderRequest{
 		HullUUID:   HullTitaniumUUID,
 		EngineUUID: EngineIonBUUID,
-		ShieldUUID: new(ShieldEnergyUUID),
+		ShieldUUID: strPtr(ShieldEnergyUUID),
 	}
 	createResult, createResp := createOrder(t, createReq)
 	defer createResp.Body.Close()
@@ -1329,7 +1334,7 @@ func TestOrder_Create_WithShieldOnly(t *testing.T) {
 	req := &CreateOrderRequest{
 		HullUUID:   HullAluminumUUID,
 		EngineUUID: EngineIonCUUID,
-		ShieldUUID: new(ShieldEnergyUUID),
+		ShieldUUID: strPtr(ShieldEnergyUUID),
 	}
 
 	result, resp := createOrder(t, req)

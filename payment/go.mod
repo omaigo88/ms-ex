@@ -1,13 +1,15 @@
-// TODO: Поменяй имя модуля github.com/student/week_1 на своё и обнови все импорты
-module github.com/student/payment
+// TODO: Поменяй имя модуля github.com/omaigo88/week_1 на своё и обнови все импорты
+module github.com/omaigo88/payment
 
 go 1.26.0
 
 require google.golang.org/grpc v1.79.2
 
+require go.opentelemetry.io/otel/sdk v1.42.0 // indirect
+
 require (
-	go.opentelemetry.io/otel v1.42.0 // indirect
-	go.opentelemetry.io/otel/sdk/metric v1.42.0 // indirect
+	github.com/google/uuid v1.6.0
+	github.com/omaigo88/shared v0.0.0-00010101000000-000000000000
 	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
@@ -15,4 +17,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-replace github.com/student/shared => ../shared
+replace github.com/omaigo88/shared => ../shared
