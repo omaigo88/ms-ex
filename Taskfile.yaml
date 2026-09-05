@@ -9,6 +9,7 @@ vars:
   PROTOC_GEN_GO_VERSION: 'v1.36.11'
   PROTOC_GEN_GO_GRPC_VERSION: 'v1.6.1'
   OGEN_VERSION: 'v1.20.3'
+  MOCKERY_VERSION: 'v3.7.0'
 
   BIN_DIR: '{{.ROOT_DIR}}/bin'
   GOLANGCI_LINT: '{{.BIN_DIR}}/golangci-lint'
@@ -18,6 +19,11 @@ vars:
   PROTOC_GEN_GO: '{{.BIN_DIR}}/protoc-gen-go'
   PROTOC_GEN_GO_GRPC: '{{.BIN_DIR}}/protoc-gen-go-grpc'
   OGEN: '{{.BIN_DIR}}/ogen'
+  MOCKERY: '{{.BIN_DIR}}/mockery'
+
+  COVERAGE_DIR: '{{.ROOT_DIR}}/coverage'
+  COVERAGE_FILE: '{{.COVERAGE_DIR}}/coverage.out'
+  COVERAGE_THRESHOLD: '40'
 
   MODULES: order inventory payment
 
@@ -68,9 +74,24 @@ tasks:
     status:
       - test -x {{.OGEN}}
 
+  mockery:install:
+    desc: "Installs mockery"
+    cmds:
+      - echo '📦 Installing mockery...'
+      - GOBIN={{.BIN_DIR}} go install github.com/vektra/mockery/v3@{{.MOCKERY_VERSION}}
+    status:
+      - test -x {{.MOCKERY}}
+
+  mocks:gen:
+    desc: "Generates interface mocks"
+    deps: [mockery:install]
+    cmds:
+      - echo '🧪 Generating mocks...'
+      - '{{.MOCKERY}}'
+
   setup:
     desc: "Installs all tools"
-    deps: [formatters:install, golangci-lint:install, buf:install, proto:install-plugins, ogen:install]
+    deps: [formatters:install, golangci-lint:install, buf:install, proto:install-plugins, ogen:install, mockery:install]
 
   format:
     desc: "Formats the code (gofumpt + gci)"
@@ -161,11 +182,90 @@ tasks:
       - go run ./cmd
 
   test:
-    desc: "Runs all tests (aliased to test:api for week_1)"
+    desc: "Runs unit tests with the race detector (excluding API tests from order/tests)"
     cmds:
-      - task: test:api
+      - |
+        for mod in order inventory payment; do
+          echo "=== $mod ==="
+          (cd "$mod" && MOD=$(GOWORK=off go list -m) && go test -v -race -count=1 $(go list ./... | grep -vE "^${MOD}/tests(/|$)"))
+        done
 
   test:api:
     desc: "Runs the API tests"
     cmds:
       - go test -v ./order/tests/...
+
+  test:e2e:
+    desc: "Builds and runs all 3 services as real processes and smoke-tests them with curl"
+    cmds:
+      - ./scripts/e2e_test.sh
+
+  coverage:clean:
+    desc: "Cleans the coverage report directory"
+    internal: true
+    cmds:
+      - rm -rf {{.COVERAGE_DIR}}
+      - mkdir -p {{.COVERAGE_DIR}}
+
+  test:coverage:
+    desc: "Runs tests with business-logic coverage (excluding API tests from order/tests)"
+    deps: [coverage:clean]
+    vars:
+      TARGET_PACKAGES:
+        sh: |
+          for mod in order inventory payment; do
+            (cd "$mod" && go list ./... | grep -v "/mocks" | grep -E '/(api|service)($|/)')
+          done | tr '\n' ','
+    preconditions:
+      - sh: test -n "{{.TARGET_PACKAGES}}"
+        msg: "No packages found to test"
+    cmds:
+      - echo "📦 Target packages:{{.TARGET_PACKAGES}}"
+      - |
+        for mod in order inventory payment; do
+          echo "=== $mod ==="
+          (cd "$mod" && MOD=$(GOWORK=off go list -m) && go test -v -race -covermode=atomic -coverprofile={{.COVERAGE_DIR}}/${mod}.out -coverpkg={{.TARGET_PACKAGES}} $(go list ./... | grep -vE "^${MOD}/tests(/|$)"))
+        done
+      - echo "📊 Merging coverage reports..."
+      - |
+        head -1 {{.COVERAGE_DIR}}/order.out > {{.COVERAGE_FILE}}
+        for f in {{.COVERAGE_DIR}}/order.out {{.COVERAGE_DIR}}/inventory.out {{.COVERAGE_DIR}}/payment.out; do
+          tail -n +2 "$f" >> {{.COVERAGE_FILE}}
+        done
+      - echo "📊 Coverage by function:"
+      - go tool cover -func={{.COVERAGE_FILE}}
+      - task: coverage:threshold
+
+  coverage:threshold:
+    desc: "Checks that coverage meets the threshold"
+    internal: true
+    vars:
+      COVERAGE:
+        sh: go tool cover -func={{.COVERAGE_FILE}} | tail -n1 | awk '{print $NF}' | tr -d '%'
+    preconditions:
+      - sh: test -f {{.COVERAGE_FILE}}
+        msg: "Coverage file not found. Run task test:coverage"
+    cmds:
+      - echo "🧾 Total coverage:{{.COVERAGE}}% | Threshold:{{.COVERAGE_THRESHOLD}}%"
+      - cmd: test $(echo "{{.COVERAGE}} >= {{.COVERAGE_THRESHOLD}}" | bc) -eq 1
+      - echo "✅ Coverage meets the threshold"
+
+  coverage:html:
+    desc: "Generates an HTML coverage report"
+    deps: [test:coverage]
+    vars:
+      HTML_FILE: '{{.COVERAGE_DIR}}/coverage.html'
+    cmds:
+      - go tool cover -html={{.COVERAGE_FILE}} -o {{.HTML_FILE}}
+      - echo "🌐 Report saved to {{.HTML_FILE}}"
+      - cmd: open {{.HTML_FILE}}
+        platforms: [darwin]
+      - cmd: xdg-open {{.HTML_FILE}}
+        platforms: [linux]
+      - cmd: start {{.HTML_FILE}}
+        platforms: [windows]
+
+  coverage:check:
+    desc: "Checks coverage without running tests"
+    cmds:
+      - task: coverage:threshold

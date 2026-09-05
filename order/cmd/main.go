@@ -14,7 +14,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 
-	orderHandler "github.com/omaigo88/order/pkg/handler"
+	orderAPI "github.com/omaigo88/order/pkg/api"
+	orderRepository "github.com/omaigo88/order/pkg/repository"
+	orderService "github.com/omaigo88/order/pkg/service"
 	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
 	paymentv1 "github.com/omaigo88/shared/pkg/proto/payment/v1"
 )
@@ -41,7 +43,7 @@ func main() {
 		slog.Error("failed to connect to InventoryService", "error", err)
 		os.Exit(1)
 	}
-	defer inventoryConn.Close()
+	defer func() { _ = inventoryConn.Close() }()
 
 	// Create a gRPC connection to PaymentService
 	paymentConn, err := grpc.NewClient(
@@ -53,18 +55,19 @@ func main() {
 		slog.Error("failed to connect to PaymentService", "error", err)
 		os.Exit(1)
 	}
-	defer paymentConn.Close()
+	defer func() { _ = paymentConn.Close() }()
 
-	// Create the store and handler
-	store := orderHandler.NewOrderStore()
-	h := orderHandler.NewHandler(
+	// Create the repository, service and handler
+	repo := orderRepository.NewMemoryRepository()
+	svc := orderService.NewService(
 		inventoryv1.NewInventoryServiceClient(inventoryConn),
 		paymentv1.NewPaymentServiceClient(paymentConn),
-		store,
+		repo,
 	)
+	h := orderAPI.NewHandler(svc)
 
 	// Create the OpenAPI server
-	orderServer, err := orderHandler.SetupServer(h)
+	orderServer, err := orderAPI.SetupServer(h)
 	if err != nil {
 		slog.Error("failed to create OpenAPI server", "error", err)
 		os.Exit(1)

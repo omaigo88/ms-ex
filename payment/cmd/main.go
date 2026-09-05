@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 
+	paymentAPI "github.com/omaigo88/payment/pkg/api"
 	paymentService "github.com/omaigo88/payment/pkg/service"
 	paymentv1 "github.com/omaigo88/shared/pkg/proto/payment/v1"
 )
@@ -37,7 +38,8 @@ func main() {
 			PermitWithoutStream: true,
 		}),
 	)
-	paymentv1.RegisterPaymentServiceServer(grpcServer, paymentService.NewServer())
+	svc := paymentService.NewService()
+	paymentv1.RegisterPaymentServiceServer(grpcServer, paymentAPI.NewServer(svc))
 
 	// Enable reflection for postman/grpcurl
 	reflection.Register(grpcServer)

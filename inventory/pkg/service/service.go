@@ -1,182 +1,103 @@
+// Package service contains the InventoryService business logic.
 package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/google/uuid"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/omaigo88/inventory/pkg/repository"
 	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
 )
 
-// Part represents a spaceship part
-type Part struct {
-	UUID          string
-	Name          string
-	Description   string
-	Price         int64 // in kopecks
-	PartType      inventoryv1.PartType
-	StockQuantity int64
-	CreatedAt     *timestamppb.Timestamp
+var (
+	// ErrEmptyUUID is returned when a required UUID is empty.
+	ErrEmptyUUID = errors.New("uuid must not be empty")
+	// ErrInvalidUUID is returned when a UUID cannot be parsed.
+	ErrInvalidUUID = errors.New("invalid uuid format")
+	// ErrPartNotFound is returned when a part does not exist in the catalog.
+	ErrPartNotFound = errors.New("part not found")
+)
+
+// Repository is the persistence dependency required by Service.
+type Repository interface {
+	GetPart(id uuid.UUID) (repository.Part, bool)
+	ListParts() []repository.Part
 }
 
-// server implements the gRPC service
-type server struct {
-	inventoryv1.UnimplementedInventoryServiceServer
-	parts map[uuid.UUID]Part
+// Service implements the InventoryService business logic.
+type Service struct {
+	repo Repository
 }
 
-// NewServer creates a server pre-populated with seed data
-func NewServer() *server {
-	now := timestamppb.Now()
-
-	return &server{
-		parts: map[uuid.UUID]Part{
-			uuid.MustParse("550e8400-e29b-41d4-a716-446655440001"): {
-				UUID:          "550e8400-e29b-41d4-a716-446655440001",
-				Name:          "Aluminum Hull",
-				Description:   "Lightweight hull for small ships",
-				Price:         500000, // 5000₽
-				PartType:      inventoryv1.PartType_PART_TYPE_HULL,
-				StockQuantity: 10,
-				CreatedAt:     now,
-			},
-			uuid.MustParse("550e8400-e29b-41d4-a716-446655440002"): {
-				UUID:          "550e8400-e29b-41d4-a716-446655440002",
-				Name:          "Titanium Hull",
-				Description:   "Durable hull for medium ships",
-				Price:         1500000, // 15000₽
-				PartType:      inventoryv1.PartType_PART_TYPE_HULL,
-				StockQuantity: 5,
-				CreatedAt:     now,
-			},
-			uuid.MustParse("550e8400-e29b-41d4-a716-446655440003"): {
-				UUID:          "550e8400-e29b-41d4-a716-446655440003",
-				Name:          "Ion Engine C",
-				Description:   "Basic class C ion engine",
-				Price:         300000, // 3000₽
-				PartType:      inventoryv1.PartType_PART_TYPE_ENGINE,
-				StockQuantity: 8,
-				CreatedAt:     now,
-			},
-			uuid.MustParse("550e8400-e29b-41d4-a716-446655440004"): {
-				UUID:          "550e8400-e29b-41d4-a716-446655440004",
-				Name:          "Ion Engine B",
-				Description:   "Improved class B ion engine",
-				Price:         800000, // 8000₽
-				PartType:      inventoryv1.PartType_PART_TYPE_ENGINE,
-				StockQuantity: 3,
-				CreatedAt:     now,
-			},
-			uuid.MustParse("550e8400-e29b-41d4-a716-446655440005"): {
-				UUID:          "550e8400-e29b-41d4-a716-446655440005",
-				Name:          "Energy Shield",
-				Description:   "Standard energy shield",
-				Price:         400000, // 4000₽
-				PartType:      inventoryv1.PartType_PART_TYPE_SHIELD,
-				StockQuantity: 6,
-				CreatedAt:     now,
-			},
-			uuid.MustParse("550e8400-e29b-41d4-a716-446655440006"): {
-				UUID:          "550e8400-e29b-41d4-a716-446655440006",
-				Name:          "Laser Cannon",
-				Description:   "Precision laser cannon",
-				Price:         250000, // 2500₽
-				PartType:      inventoryv1.PartType_PART_TYPE_WEAPON,
-				StockQuantity: 7,
-				CreatedAt:     now,
-			},
-			uuid.MustParse("550e8400-e29b-41d4-a716-446655440007"): {
-				UUID:          "550e8400-e29b-41d4-a716-446655440007",
-				Name:          "Plasma Hull",
-				Description:   "Experimental hull (out of stock)",
-				Price:         2000000, // 20000₽
-				PartType:      inventoryv1.PartType_PART_TYPE_HULL,
-				StockQuantity: 0,
-				CreatedAt:     now,
-			},
-		},
-	}
+// NewService creates a new Service backed by the given Repository.
+func NewService(repo Repository) *Service {
+	return &Service{repo: repo}
 }
 
-// toProto converts a Part to inventoryv1.Part
-func toProto(p Part) *inventoryv1.Part {
-	return &inventoryv1.Part{
-		Uuid:          p.UUID,
-		Name:          p.Name,
-		Description:   p.Description,
-		Price:         p.Price,
-		PartType:      p.PartType,
-		StockQuantity: p.StockQuantity,
-		CreatedAt:     p.CreatedAt,
-	}
-}
-
-// GetPart returns a part by UUID
-func (s *server) GetPart(
-	ctx context.Context,
-	req *inventoryv1.GetPartRequest,
-) (*inventoryv1.GetPartResponse, error) {
-	if req.GetUuid() == "" {
-		return nil, status.Error(codes.InvalidArgument, "uuid must not be empty")
+// GetPart returns a part by its raw UUID string.
+func (s *Service) GetPart(_ context.Context, rawUUID string) (repository.Part, error) {
+	if rawUUID == "" {
+		return repository.Part{}, ErrEmptyUUID
 	}
 
-	partUUID, err := uuid.Parse(req.GetUuid())
+	id, err := uuid.Parse(rawUUID)
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid uuid format: %s", req.GetUuid())
+		return repository.Part{}, fmt.Errorf("%w: %s", ErrInvalidUUID, rawUUID)
 	}
 
-	part, ok := s.parts[partUUID]
+	part, ok := s.repo.GetPart(id)
 	if !ok {
-		return nil, status.Errorf(codes.NotFound, "part not found: %s", req.GetUuid())
+		return repository.Part{}, fmt.Errorf("%w: %s", ErrPartNotFound, rawUUID)
 	}
 
-	return &inventoryv1.GetPartResponse{
-		Part: toProto(part),
-	}, nil
+	return part, nil
 }
 
-// ListParts returns a list of parts with optional filtering by type
-func (s *server) ListParts(
-	ctx context.Context,
-	req *inventoryv1.ListPartsRequest,
-) (*inventoryv1.ListPartsResponse, error) {
-	if len(req.GetUuids()) > 0 {
-		parts := make([]*inventoryv1.Part, 0, len(req.GetUuids()))
+// ListParts returns parts filtered by uuids (order preserved, partType ignored) or,
+// when uuids is empty, filtered by partType (or all parts, sorted by name).
+func (s *Service) ListParts(
+	_ context.Context,
+	partType inventoryv1.PartType,
+	rawUUIDs []string,
+) ([]repository.Part, error) {
+	if len(rawUUIDs) > 0 {
+		parts := make([]repository.Part, 0, len(rawUUIDs))
 
-		for _, rawUUID := range req.GetUuids() {
-			partUUID, err := uuid.Parse(rawUUID)
+		for _, rawUUID := range rawUUIDs {
+			id, err := uuid.Parse(rawUUID)
 			if err != nil {
-				return nil, status.Errorf(codes.InvalidArgument, "invalid uuid format: %s", rawUUID)
+				return nil, fmt.Errorf("%w: %s", ErrInvalidUUID, rawUUID)
 			}
 
-			part, ok := s.parts[partUUID]
+			part, ok := s.repo.GetPart(id)
 			if !ok {
-				return nil, status.Errorf(codes.NotFound, "part not found: %s", rawUUID)
+				return nil, fmt.Errorf("%w: %s", ErrPartNotFound, rawUUID)
 			}
 
-			parts = append(parts, toProto(part))
+			parts = append(parts, part)
 		}
 
-		return &inventoryv1.ListPartsResponse{Parts: parts}, nil
+		return parts, nil
 	}
 
-	parts := make([]*inventoryv1.Part, 0, len(s.parts))
+	all := s.repo.ListParts()
+	parts := make([]repository.Part, 0, len(all))
 
-	for _, part := range s.parts {
-		if req.GetPartType() != inventoryv1.PartType_PART_TYPE_UNSPECIFIED && part.PartType != req.GetPartType() {
+	for _, part := range all {
+		if partType != inventoryv1.PartType_PART_TYPE_UNSPECIFIED && part.PartType != partType {
 			continue
 		}
 
-		parts = append(parts, toProto(part))
+		parts = append(parts, part)
 	}
 
 	sort.Slice(parts, func(i, j int) bool {
-		return parts[i].GetName() < parts[j].GetName()
+		return parts[i].Name < parts[j].Name
 	})
 
-	return &inventoryv1.ListPartsResponse{Parts: parts}, nil
+	return parts, nil
 }

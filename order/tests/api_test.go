@@ -32,15 +32,20 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
+	inventoryAPI "github.com/omaigo88/inventory/pkg/api"
+	inventoryRepository "github.com/omaigo88/inventory/pkg/repository"
 	inventoryService "github.com/omaigo88/inventory/pkg/service"
-	orderHandler "github.com/omaigo88/order/pkg/handler"
+	orderAPI "github.com/omaigo88/order/pkg/api"
+	orderRepository "github.com/omaigo88/order/pkg/repository"
+	orderService "github.com/omaigo88/order/pkg/service"
 	"github.com/omaigo88/order/tests/testutil"
+	paymentAPI "github.com/omaigo88/payment/pkg/api"
 	paymentService "github.com/omaigo88/payment/pkg/service"
 	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
 	paymentv1 "github.com/omaigo88/shared/pkg/proto/payment/v1"
 )
 
-// Preloaded UUIDs and part prices (from inventory/pkg/service/service.go)
+// Preloaded UUIDs and part prices (from inventory/pkg/repository/memory.go)
 const (
 	HullAluminumUUID   = "550e8400-e29b-41d4-a716-446655440001" // 500000 kopecks (5000 RUB)
 	HullTitaniumUUID   = "550e8400-e29b-41d4-a716-446655440002" // 1500000 kopecks (15000 RUB)
@@ -95,7 +100,9 @@ func TestMain(m *testing.M) {
 	// 1. Inventory gRPC via bufconn
 	invLis = bufconn.Listen(bufSize)
 	invGRPCServer := grpc.NewServer()
-	inventoryv1.RegisterInventoryServiceServer(invGRPCServer, inventoryService.NewServer())
+	invRepo := inventoryRepository.NewMemoryRepository()
+	invSvc := inventoryService.NewService(invRepo)
+	inventoryv1.RegisterInventoryServiceServer(invGRPCServer, inventoryAPI.NewServer(invSvc))
 	go func() {
 		if invServeErr := invGRPCServer.Serve(invLis); invServeErr != nil {
 			slog.Error("inventory gRPC server failed", "error", invServeErr)
@@ -117,7 +124,8 @@ func TestMain(m *testing.M) {
 	// 2. Payment gRPC via bufconn
 	payLis = bufconn.Listen(bufSize)
 	payGRPCServer := grpc.NewServer()
-	paymentv1.RegisterPaymentServiceServer(payGRPCServer, paymentService.NewServer())
+	paySvc := paymentService.NewService()
+	paymentv1.RegisterPaymentServiceServer(payGRPCServer, paymentAPI.NewServer(paySvc))
 	go func() {
 		if payServeErr := payGRPCServer.Serve(payLis); payServeErr != nil {
 			slog.Error("payment gRPC server failed", "error", payServeErr)
@@ -137,9 +145,10 @@ func TestMain(m *testing.M) {
 	paymentClient = paymentv1.NewPaymentServiceClient(payConn)
 
 	// 3. Order HTTP via httptest
-	store := orderHandler.NewOrderStore()
-	h := orderHandler.NewHandler(inventoryClient, paymentClient, store)
-	orderServer, err := orderHandler.SetupServer(h)
+	orderRepo := orderRepository.NewMemoryRepository()
+	orderSvc := orderService.NewService(inventoryClient, paymentClient, orderRepo)
+	h := orderAPI.NewHandler(orderSvc)
+	orderServer, err := orderAPI.SetupServer(h)
 	if err != nil {
 		slog.Error("order HTTP server setup failed", "error", err)
 		os.Exit(1)
@@ -149,8 +158,8 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 
 	ts.Close()
-	invConn.Close()
-	payConn.Close()
+	_ = invConn.Close()
+	_ = payConn.Close()
 	invGRPCServer.Stop()
 	payGRPCServer.Stop()
 	os.Exit(code)
@@ -620,7 +629,7 @@ func TestOrder_Create_Success_MinimalParts(t *testing.T) {
 	}
 
 	result, resp := createOrder(t, req)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	require.NotNil(t, result)
@@ -637,7 +646,7 @@ func TestOrder_Create_Success_AllParts(t *testing.T) {
 	}
 
 	result, resp := createOrder(t, req)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	require.NotNil(t, result)
@@ -654,7 +663,7 @@ func TestOrder_Create_VerifyTotalPrice(t *testing.T) {
 	}
 
 	result, resp := createOrder(t, req)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	assert.Equal(t, int64(800000), result.TotalPrice, "500000 + 300000 = 800000")
@@ -667,7 +676,7 @@ func TestOrder_Create_HullNotFound(t *testing.T) {
 	}
 
 	_, resp := createOrder(t, req)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
@@ -679,7 +688,7 @@ func TestOrder_Create_EngineNotFound(t *testing.T) {
 	}
 
 	_, resp := createOrder(t, req)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
@@ -692,7 +701,7 @@ func TestOrder_Create_ShieldNotFound(t *testing.T) {
 	}
 
 	_, resp := createOrder(t, req)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
@@ -705,7 +714,7 @@ func TestOrder_Create_WeaponNotFound(t *testing.T) {
 	}
 
 	_, resp := createOrder(t, req)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
@@ -717,12 +726,12 @@ func TestOrder_Get_Success(t *testing.T) {
 		EngineUUID: EngineIonCUUID,
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	// Get the order
 	order, resp := getOrder(t, createResult.OrderUUID)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.NotNil(t, order)
@@ -739,12 +748,12 @@ func TestOrder_Get_VerifyStatus_PendingPayment(t *testing.T) {
 		EngineUUID: EngineIonCUUID,
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	// Get and check the status
 	order, resp := getOrder(t, createResult.OrderUUID)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "PENDING_PAYMENT", order.Status)
@@ -752,7 +761,7 @@ func TestOrder_Get_VerifyStatus_PendingPayment(t *testing.T) {
 
 func TestOrder_Get_NotFound(t *testing.T) {
 	_, resp := getOrder(t, uuid.New().String())
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
@@ -764,13 +773,13 @@ func TestOrder_Pay_Success_Card(t *testing.T) {
 		EngineUUID: EngineIonCUUID,
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	// Pay for the order
 	payReq := &PayOrderRequest{PaymentMethod: "CARD"}
 	payResult, resp := payOrder(t, createResult.OrderUUID, payReq)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.NotNil(t, payResult)
@@ -784,17 +793,17 @@ func TestOrder_Pay_VerifyStatusChange(t *testing.T) {
 		EngineUUID: EngineIonCUUID,
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	// Pay for the order
 	payReq := &PayOrderRequest{PaymentMethod: "CARD"}
 	_, payResp := payOrder(t, createResult.OrderUUID, payReq)
-	defer payResp.Body.Close()
+	defer func() { _ = payResp.Body.Close() }()
 
 	// Get and check the status change to PAID
 	order, getResp := getOrder(t, createResult.OrderUUID)
-	defer getResp.Body.Close()
+	defer func() { _ = getResp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, getResp.StatusCode)
 	assert.Equal(t, "PAID", order.Status)
@@ -806,7 +815,7 @@ func TestOrder_Pay_VerifyStatusChange(t *testing.T) {
 func TestOrder_Pay_NotFound(t *testing.T) {
 	payReq := &PayOrderRequest{PaymentMethod: "CARD"}
 	_, resp := payOrder(t, uuid.New().String(), payReq)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
@@ -818,17 +827,17 @@ func TestOrder_Pay_AlreadyPaid(t *testing.T) {
 		EngineUUID: EngineIonCUUID,
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	// Pay for the order the first time
 	payReq := &PayOrderRequest{PaymentMethod: "CARD"}
 	_, payResp1 := payOrder(t, createResult.OrderUUID, payReq)
-	defer payResp1.Body.Close()
+	defer func() { _ = payResp1.Body.Close() }()
 
 	// Try to pay again (should be a conflict error)
 	_, payResp2 := payOrder(t, createResult.OrderUUID, payReq)
-	defer payResp2.Body.Close()
+	defer func() { _ = payResp2.Body.Close() }()
 
 	require.Equal(t, http.StatusConflict, payResp2.StatusCode)
 }
@@ -840,17 +849,17 @@ func TestOrder_Pay_AlreadyCancelled(t *testing.T) {
 		EngineUUID: EngineIonCUUID,
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	// Cancel the order
 	_, cancelResp := cancelOrder(t, createResult.OrderUUID)
-	defer cancelResp.Body.Close()
+	defer func() { _ = cancelResp.Body.Close() }()
 
 	// Try to pay for the cancelled order (should be a conflict error)
 	payReq := &PayOrderRequest{PaymentMethod: "CARD"}
 	_, payResp := payOrder(t, createResult.OrderUUID, payReq)
-	defer payResp.Body.Close()
+	defer func() { _ = payResp.Body.Close() }()
 
 	require.Equal(t, http.StatusConflict, payResp.StatusCode)
 }
@@ -862,12 +871,12 @@ func TestOrder_Cancel_Success(t *testing.T) {
 		EngineUUID: EngineIonCUUID,
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	// Cancel the order
 	_, resp := cancelOrder(t, createResult.OrderUUID)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -879,16 +888,16 @@ func TestOrder_Cancel_VerifyStatusChange(t *testing.T) {
 		EngineUUID: EngineIonCUUID,
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	// Cancel the order
 	_, cancelResp := cancelOrder(t, createResult.OrderUUID)
-	defer cancelResp.Body.Close()
+	defer func() { _ = cancelResp.Body.Close() }()
 
 	// Get and check the status change to CANCELLED
 	order, getResp := getOrder(t, createResult.OrderUUID)
-	defer getResp.Body.Close()
+	defer func() { _ = getResp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, getResp.StatusCode)
 	assert.Equal(t, "CANCELLED", order.Status)
@@ -896,7 +905,7 @@ func TestOrder_Cancel_VerifyStatusChange(t *testing.T) {
 
 func TestOrder_Cancel_NotFound(t *testing.T) {
 	_, resp := cancelOrder(t, uuid.New().String())
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
@@ -908,17 +917,17 @@ func TestOrder_Cancel_AlreadyPaid(t *testing.T) {
 		EngineUUID: EngineIonCUUID,
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	// Pay for the order
 	payReq := &PayOrderRequest{PaymentMethod: "CARD"}
 	_, payResp := payOrder(t, createResult.OrderUUID, payReq)
-	defer payResp.Body.Close()
+	defer func() { _ = payResp.Body.Close() }()
 
 	// Try to cancel the paid order (should be a conflict error)
 	_, cancelResp := cancelOrder(t, createResult.OrderUUID)
-	defer cancelResp.Body.Close()
+	defer func() { _ = cancelResp.Body.Close() }()
 
 	require.Equal(t, http.StatusConflict, cancelResp.StatusCode)
 }
@@ -930,16 +939,16 @@ func TestOrder_Cancel_AlreadyCancelled(t *testing.T) {
 		EngineUUID: EngineIonCUUID,
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	// Cancel the order the first time
 	_, cancelResp1 := cancelOrder(t, createResult.OrderUUID)
-	defer cancelResp1.Body.Close()
+	defer func() { _ = cancelResp1.Body.Close() }()
 
 	// Try to cancel again (should be a conflict error)
 	_, cancelResp2 := cancelOrder(t, createResult.OrderUUID)
-	defer cancelResp2.Body.Close()
+	defer func() { _ = cancelResp2.Body.Close() }()
 
 	require.Equal(t, http.StatusConflict, cancelResp2.StatusCode)
 }
@@ -954,7 +963,7 @@ func TestOrder_Create_WithWeaponOnly(t *testing.T) {
 	}
 
 	result, resp := createOrder(t, req)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	require.NotNil(t, result)
@@ -977,13 +986,13 @@ func TestOrder_Pay_AllMethods(t *testing.T) {
 				EngineUUID: EngineIonCUUID,
 			}
 			createResult, createResp := createOrder(t, createReq)
-			defer createResp.Body.Close()
+			defer func() { _ = createResp.Body.Close() }()
 			require.NotNil(t, createResult)
 
 			// Pay using this method
 			payReq := &PayOrderRequest{PaymentMethod: method}
 			payResult, resp := payOrder(t, createResult.OrderUUID, payReq)
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			require.Equal(t, http.StatusOK, resp.StatusCode)
 			require.NotNil(t, payResult)
@@ -991,7 +1000,7 @@ func TestOrder_Pay_AllMethods(t *testing.T) {
 
 			// Check that the payment method was saved
 			order, getResp := getOrder(t, createResult.OrderUUID)
-			defer getResp.Body.Close()
+			defer func() { _ = getResp.Body.Close() }()
 			require.NotNil(t, order.PaymentMethod)
 			assert.Equal(t, method, *order.PaymentMethod)
 		})
@@ -1009,12 +1018,12 @@ func TestOrder_Get_WithOptionalParts(t *testing.T) {
 	}
 
 	createResult, createResp := createOrder(t, req)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	// Get the order and check that the optional parts were saved
 	order, resp := getOrder(t, createResult.OrderUUID)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.NotNil(t, order.ShieldUUID)
@@ -1042,7 +1051,7 @@ func TestOrder_FullLifecycle_CreatePayGet(t *testing.T) {
 		ShieldUUID: strPtr(ShieldEnergyUUID),
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 	assert.NotEmpty(t, createResult.OrderUUID)
 
@@ -1051,20 +1060,20 @@ func TestOrder_FullLifecycle_CreatePayGet(t *testing.T) {
 
 	// 2. Get the order (check PENDING_PAYMENT)
 	order1, getResp1 := getOrder(t, createResult.OrderUUID)
-	defer getResp1.Body.Close()
+	defer func() { _ = getResp1.Body.Close() }()
 	assert.Equal(t, "PENDING_PAYMENT", order1.Status)
 	assert.Nil(t, order1.TransactionUUID)
 
 	// 3. Pay for the order
 	payReq := &PayOrderRequest{PaymentMethod: "SBP"}
 	payResult, payResp := payOrder(t, createResult.OrderUUID, payReq)
-	defer payResp.Body.Close()
+	defer func() { _ = payResp.Body.Close() }()
 	require.NotNil(t, payResult)
 	assert.NotEmpty(t, payResult.TransactionUUID)
 
 	// 4. Get the order (check PAID)
 	order2, getResp2 := getOrder(t, createResult.OrderUUID)
-	defer getResp2.Body.Close()
+	defer func() { _ = getResp2.Body.Close() }()
 
 	assert.Equal(t, "PAID", order2.Status)
 	require.NotNil(t, order2.TransactionUUID)
@@ -1080,21 +1089,21 @@ func TestOrder_FullLifecycle_CreateCancelGet(t *testing.T) {
 		EngineUUID: EngineIonCUUID,
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	// 2. Get the order (check PENDING_PAYMENT)
 	order1, getResp1 := getOrder(t, createResult.OrderUUID)
-	defer getResp1.Body.Close()
+	defer func() { _ = getResp1.Body.Close() }()
 	assert.Equal(t, "PENDING_PAYMENT", order1.Status)
 
 	// 3. Cancel the order
 	_, cancelResp := cancelOrder(t, createResult.OrderUUID)
-	defer cancelResp.Body.Close()
+	defer func() { _ = cancelResp.Body.Close() }()
 
 	// 4. Get the order (check CANCELLED)
 	order2, getResp2 := getOrder(t, createResult.OrderUUID)
-	defer getResp2.Body.Close()
+	defer func() { _ = getResp2.Body.Close() }()
 
 	assert.Equal(t, "CANCELLED", order2.Status)
 	assert.Nil(t, order2.TransactionUUID)
@@ -1113,7 +1122,7 @@ func TestOrder_FullLifecycle_AllPartsPayGet(t *testing.T) {
 
 	// 1. Create an order
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	expectedTotal := int64(HullTitaniumPrice + EngineIonBPrice + ShieldEnergyPrice + WeaponLaserPrice)
@@ -1121,7 +1130,7 @@ func TestOrder_FullLifecycle_AllPartsPayGet(t *testing.T) {
 
 	// 2. Check all parts in the GET response
 	order1, getResp1 := getOrder(t, createResult.OrderUUID)
-	defer getResp1.Body.Close()
+	defer func() { _ = getResp1.Body.Close() }()
 	assert.Equal(t, HullTitaniumUUID, order1.HullUUID)
 	assert.Equal(t, EngineIonBUUID, order1.EngineUUID)
 	require.NotNil(t, order1.ShieldUUID)
@@ -1132,12 +1141,12 @@ func TestOrder_FullLifecycle_AllPartsPayGet(t *testing.T) {
 	// 3. Pay for the order
 	payReq := &PayOrderRequest{PaymentMethod: "CREDIT_CARD"}
 	payResult, payResp := payOrder(t, createResult.OrderUUID, payReq)
-	defer payResp.Body.Close()
+	defer func() { _ = payResp.Body.Close() }()
 	require.NotNil(t, payResult)
 
 	// 4. Check the final state
 	order2, getResp2 := getOrder(t, createResult.OrderUUID)
-	defer getResp2.Body.Close()
+	defer func() { _ = getResp2.Body.Close() }()
 
 	assert.Equal(t, "PAID", order2.Status)
 	require.NotNil(t, order2.PaymentMethod)
@@ -1153,7 +1162,7 @@ func TestOrder_Create_OutOfStock(t *testing.T) {
 	}
 
 	_, resp := createOrder(t, req)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusConflict, resp.StatusCode)
 }
@@ -1167,7 +1176,7 @@ func TestOrder_Create_InvalidBody_EmptyJSON(t *testing.T) {
 
 	resp, err := httpClient.Do(httpReq)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
@@ -1179,7 +1188,7 @@ func TestOrder_Create_InvalidBody_NotJSON(t *testing.T) {
 
 	resp, err := httpClient.Do(httpReq)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
@@ -1192,7 +1201,7 @@ func TestOrder_Create_InvalidBody_MissingHullUUID(t *testing.T) {
 
 	resp, err := httpClient.Do(httpReq)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
@@ -1205,7 +1214,7 @@ func TestOrder_Create_InvalidBody_MissingEngineUUID(t *testing.T) {
 
 	resp, err := httpClient.Do(httpReq)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
@@ -1218,7 +1227,7 @@ func TestOrder_Create_InvalidBody_InvalidHullUUID(t *testing.T) {
 
 	resp, err := httpClient.Do(httpReq)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
@@ -1226,7 +1235,7 @@ func TestOrder_Create_InvalidBody_InvalidHullUUID(t *testing.T) {
 func TestOrder_Get_InvalidUUIDInPath(t *testing.T) {
 	resp, err := httpClient.Get(orderBaseURL() + "/api/v1/orders/not-a-uuid")
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
@@ -1239,7 +1248,7 @@ func TestOrder_Pay_InvalidUUIDInPath(t *testing.T) {
 
 	resp, err := httpClient.Do(httpReq)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
@@ -1251,7 +1260,7 @@ func TestOrder_Pay_InvalidPaymentMethod(t *testing.T) {
 		EngineUUID: EngineIonCUUID,
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	// Try to pay with an invalid method (ogen rejects it)
@@ -1264,7 +1273,7 @@ func TestOrder_Pay_InvalidPaymentMethod(t *testing.T) {
 
 	resp, err := httpClient.Do(httpReq)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
@@ -1276,7 +1285,7 @@ func TestOrder_Pay_MissingPaymentMethod(t *testing.T) {
 		EngineUUID: EngineIonCUUID,
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	// Try to pay without payment_method
@@ -1289,7 +1298,7 @@ func TestOrder_Pay_MissingPaymentMethod(t *testing.T) {
 
 	resp, err := httpClient.Do(httpReq)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
@@ -1301,7 +1310,7 @@ func TestOrder_Pay_EmptyBody(t *testing.T) {
 		EngineUUID: EngineIonCUUID,
 	}
 	createResult, createResp := createOrder(t, createReq)
-	defer createResp.Body.Close()
+	defer func() { _ = createResp.Body.Close() }()
 	require.NotNil(t, createResult)
 
 	httpReq, err := http.NewRequest(http.MethodPost,
@@ -1312,7 +1321,7 @@ func TestOrder_Pay_EmptyBody(t *testing.T) {
 
 	resp, err := httpClient.Do(httpReq)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
@@ -1323,7 +1332,7 @@ func TestOrder_Cancel_InvalidUUIDInPath(t *testing.T) {
 
 	resp, err := httpClient.Do(httpReq)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
@@ -1338,7 +1347,7 @@ func TestOrder_Create_WithShieldOnly(t *testing.T) {
 	}
 
 	result, resp := createOrder(t, req)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	require.NotNil(t, result)

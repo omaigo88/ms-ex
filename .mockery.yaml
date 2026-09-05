@@ -1,0 +1,22 @@
+dir: "{{.InterfaceDir}}/mocks"
+filename: "mock_{{.InterfaceName}}.go"
+pkgname: "mocks"
+structname: "Mock{{.InterfaceName}}"
+template: testify
+
+packages:
+  github.com/omaigo88/inventory/pkg/service:
+    config:
+      all: true
+  github.com/omaigo88/inventory/pkg/api:
+    config:
+      all: true
+  github.com/omaigo88/payment/pkg/api:
+    config:
+      all: true
+  github.com/omaigo88/order/pkg/service:
+    config:
+      all: true
+  github.com/omaigo88/order/pkg/api:
+    config:
+      all: true

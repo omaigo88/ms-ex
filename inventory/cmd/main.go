@@ -13,6 +13,8 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 
+	inventoryAPI "github.com/omaigo88/inventory/pkg/api"
+	inventoryRepository "github.com/omaigo88/inventory/pkg/repository"
 	inventoryService "github.com/omaigo88/inventory/pkg/service"
 	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
 )
@@ -37,7 +39,9 @@ func main() {
 			PermitWithoutStream: true,
 		}),
 	)
-	inventoryv1.RegisterInventoryServiceServer(grpcServer, inventoryService.NewServer())
+	repo := inventoryRepository.NewMemoryRepository()
+	svc := inventoryService.NewService(repo)
+	inventoryv1.RegisterInventoryServiceServer(grpcServer, inventoryAPI.NewServer(svc))
 
 	// Enable reflection for postman/grpcurl
 	reflection.Register(grpcServer)
