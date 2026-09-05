@@ -1,0 +1,8 @@
+description: Component out of stock
+content:
+  application/json:
+    schema:
+      $ref: '../errors/error.yaml'
+    example:
+      code: 409
+      message: "Component out of stock"

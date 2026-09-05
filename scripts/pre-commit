@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# Git pre-commit hook
+# Copy to .git/hooks/pre-commit
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+echo "🧼 Formatting code..."
+task -d "$REPO_ROOT" format
+
+echo "🔍 Running linter..."
+task -d "$REPO_ROOT" lint
+
+echo "✅ All clean!"

@@ -1,0 +1,3 @@
+description: Response with full order information
+allOf:
+  - $ref: './order_dto.yaml'

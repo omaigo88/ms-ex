@@ -1,0 +1,59 @@
+type: object
+required:
+  - order_uuid
+  - hull_uuid
+  - engine_uuid
+  - total_price
+  - status
+  - created_at
+properties:
+  order_uuid:
+    type: string
+    format: uuid
+    description: Order UUID (v4)
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  hull_uuid:
+    type: string
+    format: uuid
+    description: Hull UUID (v4)
+    example: "550e8400-e29b-41d4-a716-446655440001"
+  engine_uuid:
+    type: string
+    format: uuid
+    description: Engine UUID (v4)
+    example: "550e8400-e29b-41d4-a716-446655440003"
+  shield_uuid:
+    type: string
+    format: uuid
+    nullable: true
+    description: Shield UUID (optional, v4)
+    example: "550e8400-e29b-41d4-a716-446655440005"
+  weapon_uuid:
+    type: string
+    format: uuid
+    nullable: true
+    description: Weapon UUID (optional, v4)
+    example: null
+  total_price:
+    type: integer
+    format: int64
+    description: Total price in kopecks
+    example: 1200000
+  transaction_uuid:
+    type: string
+    format: uuid
+    nullable: true
+    description: Transaction UUID (after payment, v4)
+    example: null
+  payment_method:
+    nullable: true
+    description: Payment method (after payment)
+    allOf:
+      - $ref: './enums/payment_method.yaml'
+  status:
+    $ref: './enums/order_status.yaml'
+  created_at:
+    type: string
+    format: date-time
+    description: Order creation date
+    example: "2026-01-30T12:00:00Z"

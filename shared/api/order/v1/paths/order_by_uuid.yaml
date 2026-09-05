@@ -1,0 +1,22 @@
+parameters:
+  - $ref: ../params/order_uuid.yaml
+
+get:
+  summary: Get an order by UUID
+  description: Returns full information about an order to build a spaceship
+  operationId: getOrder
+  tags:
+    - Orders
+  responses:
+    '200':
+      description: Order found successfully
+      content:
+        application/json:
+          schema:
+            $ref: ../components/order_dto.yaml
+    '400':
+      $ref: '../components/responses/bad_request.yaml'
+    '404':
+      $ref: '../components/responses/order_not_found.yaml'
+    '500':
+      $ref: '../components/responses/internal_server_error.yaml'

@@ -1,0 +1,2 @@
+description: Empty response on successful cancellation (success is indicated by code 200)
+type: object

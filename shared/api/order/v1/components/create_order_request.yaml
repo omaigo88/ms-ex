@@ -1,0 +1,27 @@
+type: object
+required:
+  - hull_uuid
+  - engine_uuid
+properties:
+  hull_uuid:
+    type: string
+    format: uuid
+    description: Hull UUID (required, v4)
+    example: "550e8400-e29b-41d4-a716-446655440001"
+  engine_uuid:
+    type: string
+    format: uuid
+    description: Engine UUID (required, v4)
+    example: "550e8400-e29b-41d4-a716-446655440003"
+  shield_uuid:
+    type: string
+    format: uuid
+    nullable: true
+    description: Shield UUID (optional, v4)
+    example: "550e8400-e29b-41d4-a716-446655440005"
+  weapon_uuid:
+    type: string
+    format: uuid
+    nullable: true
+    description: Weapon UUID (optional, v4)
+    example: "550e8400-e29b-41d4-a716-446655440006"

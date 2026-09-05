@@ -1,0 +1,171 @@
+version: '3'
+
+vars:
+  GO_VERSION: '1.26.0'
+  GOLANGCI_LINT_VERSION: 'v2.12.2'
+  GCI_VERSION: 'v0.14.0'
+  GOFUMPT_VERSION: 'v0.10.0'
+  BUF_VERSION: '1.69.0'
+  PROTOC_GEN_GO_VERSION: 'v1.36.11'
+  PROTOC_GEN_GO_GRPC_VERSION: 'v1.6.1'
+  OGEN_VERSION: 'v1.20.3'
+
+  BIN_DIR: '{{.ROOT_DIR}}/bin'
+  GOLANGCI_LINT: '{{.BIN_DIR}}/golangci-lint'
+  GCI: '{{.BIN_DIR}}/gci'
+  GOFUMPT: '{{.BIN_DIR}}/gofumpt'
+  BUF: '{{.BIN_DIR}}/buf'
+  PROTOC_GEN_GO: '{{.BIN_DIR}}/protoc-gen-go'
+  PROTOC_GEN_GO_GRPC: '{{.BIN_DIR}}/protoc-gen-go-grpc'
+  OGEN: '{{.BIN_DIR}}/ogen'
+
+  MODULES: order inventory payment
+
+tasks:
+  formatters:install:
+    desc: "Installs gofumpt and gci"
+    cmds:
+      - echo '📦 Installing gofumpt...'
+      - GOBIN={{.BIN_DIR}} go install mvdan.cc/gofumpt@{{.GOFUMPT_VERSION}}
+      - echo '📦 Installing gci...'
+      - GOBIN={{.BIN_DIR}} go install github.com/daixiang0/gci@{{.GCI_VERSION}}
+    status:
+      - test -x {{.GOFUMPT}}
+      - test -x {{.GCI}}
+
+  golangci-lint:install:
+    desc: "Installs golangci-lint"
+    cmds:
+      - echo '📦 Installing golangci-lint...'
+      - GOBIN={{.BIN_DIR}} go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
+    status:
+      - test -x {{.GOLANGCI_LINT}}
+
+  buf:install:
+    desc: "Installs buf"
+    cmds:
+      - echo '📦 Installing buf...'
+      - GOBIN={{.BIN_DIR}} go install github.com/bufbuild/buf/cmd/buf@v{{.BUF_VERSION}}
+    status:
+      - test -x {{.BUF}}
+
+  proto:install-plugins:
+    desc: "Installs protoc plugins"
+    cmds:
+      - echo '📦 Installing protoc-gen-go...'
+      - GOBIN={{.BIN_DIR}} go install google.golang.org/protobuf/cmd/protoc-gen-go@{{.PROTOC_GEN_GO_VERSION}}
+      - echo '📦 Installing protoc-gen-go-grpc...'
+      - GOBIN={{.BIN_DIR}} go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@{{.PROTOC_GEN_GO_GRPC_VERSION}}
+    status:
+      - test -x {{.PROTOC_GEN_GO}}
+      - test -x {{.PROTOC_GEN_GO_GRPC}}
+
+  ogen:install:
+    desc: "Installs ogen"
+    cmds:
+      - echo '📦 Installing ogen...'
+      - GOBIN={{.BIN_DIR}} go install github.com/ogen-go/ogen/cmd/ogen@{{.OGEN_VERSION}}
+    status:
+      - test -x {{.OGEN}}
+
+  setup:
+    desc: "Installs all tools"
+    deps: [formatters:install, golangci-lint:install, buf:install, proto:install-plugins, ogen:install]
+
+  format:
+    desc: "Formats the code (gofumpt + gci)"
+    deps: [formatters:install]
+    cmds:
+      - echo '🧹 Formatting code with gofumpt...'
+      - find . -type f -name '*.go' ! -path '*/mocks/*' ! -path '*/pkg/proto/*' ! -path '*/pkg/openapi/*' -exec {{.GOFUMPT}} -extra -w {} +
+      - echo '📦 Sorting imports with gci...'
+      # TODO: Change the prefix to your own module
+      - find . -type f -name '*.go' ! -path '*/mocks/*' ! -path '*/pkg/proto/*' ! -path '*/pkg/openapi/*' -exec {{.GCI}} write -s standard -s default -s "prefix(github.com/omaigo88)" {} +
+
+  build:
+    desc: "Builds all Go modules (go build)"
+    cmds:
+      - go build ./order/... ./inventory/... ./payment/...
+
+  lint:
+    desc: "Runs golangci-lint"
+    deps: [golangci-lint:install]
+    cmds:
+      - '{{.GOLANGCI_LINT}} run --allow-parallel-runners order/... inventory/... payment/... --config=.golangci.yml'
+
+  proto:format:
+    desc: "Formats .proto files (buf format)"
+    deps: [buf:install]
+    dir: shared/proto
+    cmds:
+      - echo '🧹 Formatting .proto files...'
+      - '{{.BUF}} format -w'
+
+  proto:lint:
+    desc: "Lints .proto files"
+    deps: [buf:install, proto:install-plugins, proto:format]
+    dir: shared/proto
+    cmds:
+      - echo '🔍 Linting .proto files...'
+      - '{{.BUF}} lint'
+
+  proto:gen:
+    desc: "Generates Go code from .proto"
+    deps: [buf:install, proto:install-plugins, proto:format]
+    dir: shared/proto
+    cmds:
+      - echo '🔨 Generating Go code from .proto...'
+      - '{{.BUF}} generate'
+
+  ogen:gen:
+    desc: "Generates Go code from OpenAPI"
+    deps: [ogen:install]
+    dir: shared
+    cmds:
+      - echo '🔨 Generating Go code from OpenAPI...'
+      - '{{.OGEN}} -target ./pkg/openapi/order/v1 -package orderv1 -clean ./api/order/v1/order.openapi.yaml 2>/dev/null'
+
+  gen:
+    desc: "Generates all code"
+    cmds:
+      - task: proto:gen
+      - task: ogen:gen
+
+  deps:update:
+    desc: "Updates dependencies"
+    cmds:
+      - echo '🔄 Syncing go.work...'
+      - go work sync
+      - echo '🔄 Updating dependencies in services...'
+      - for: { var: MODULES }
+        cmd: cd {{.ITEM}} && go mod tidy -compat={{.GO_VERSION}}
+      - echo '🔄 Updating dependencies in shared (proto/openapi)...'
+      - cd shared && go mod tidy -compat={{.GO_VERSION}}
+
+  run:inventory:
+    desc: "Runs InventoryService (gRPC :50051)"
+    dir: inventory
+    cmds:
+      - go run ./cmd
+
+  run:payment:
+    desc: "Runs PaymentService (gRPC :50052)"
+    dir: payment
+    cmds:
+      - go run ./cmd
+
+  run:order:
+    desc: "Runs OrderService (HTTP :8080)"
+    dir: order
+    cmds:
+      - go run ./cmd
+
+  test:
+    desc: "Runs all tests (aliased to test:api for week_1)"
+    cmds:
+      - task: test:api
+
+  test:api:
+    desc: "Runs the API tests"
+    cmds:
+      - go test -v ./order/tests/...

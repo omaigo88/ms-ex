@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package payment.v1;
+
+// TODO: Replace with the actual go_package
+option go_package = "github.com/omaigo88/shared/pkg/proto/payment/v1;paymentv1";
+
+// PaymentService handles order payments
+service PaymentService {
+  // PayOrder handles payment for an order
+  rpc PayOrder(PayOrderRequest) returns (PayOrderResponse);
+}
+
+// Payment method
+enum PaymentMethod {
+  PAYMENT_METHOD_UNSPECIFIED = 0;
+  PAYMENT_METHOD_CARD = 1;
+  PAYMENT_METHOD_SBP = 2;
+  PAYMENT_METHOD_CREDIT_CARD = 3;
+  PAYMENT_METHOD_INVESTOR_MONEY = 4;
+}
+
+// Request to pay for an order
+message PayOrderRequest {
+  // Order UUID
+  string order_uuid = 1;
+
+  PaymentMethod payment_method = 2;
+}
+
+// Response for a pay order request
+message PayOrderResponse {
+  // Transaction UUID
+  string transaction_uuid = 1;
+}

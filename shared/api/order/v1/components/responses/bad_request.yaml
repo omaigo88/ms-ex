@@ -1,0 +1,14 @@
+# Reusable response for all HTTP 400s.
+#
+# The error schema is the same everywhere (Error), but the example at the
+# media type level overrides the schema's example — this is needed so that
+# Swagger UI doesn't show the same example (with code: 400) for every error
+# code.
+description: Invalid request
+content:
+  application/json:
+    schema:
+      $ref: '../errors/error.yaml'
+    example:
+      code: 400
+      message: "Invalid request parameters"
