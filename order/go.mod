@@ -4,7 +4,10 @@ module github.com/omaigo88/order
 go 1.26.0
 
 require (
+	github.com/avito-tech/go-transaction-manager/drivers/pgxv5/v2 v2.0.4
+	github.com/avito-tech/go-transaction-manager/trm/v2 v2.0.4
 	github.com/google/uuid v1.6.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/omaigo88/inventory v0.0.0-00010101000000-000000000000
 	github.com/omaigo88/payment v0.0.0-00010101000000-000000000000
 	github.com/omaigo88/shared v0.0.0-00010101000000-000000000000
@@ -23,6 +26,9 @@ require (
 	github.com/go-faster/yaml v0.4.6 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ogen-go/ogen v1.20.1 // indirect

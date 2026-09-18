@@ -32,7 +32,7 @@ func TestService_GetPart_Success(t *testing.T) {
 	part := samplePart(id, "Hull", inventoryv1.PartType_PART_TYPE_HULL)
 
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().GetPart(id).Return(part, true)
+	repo.EXPECT().GetPart(context.Background(), id).Return(part, nil)
 
 	svc := service.NewService(repo)
 
@@ -61,7 +61,7 @@ func TestService_GetPart_NotFound(t *testing.T) {
 	id := uuid.New()
 
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().GetPart(id).Return(repository.Part{}, false)
+	repo.EXPECT().GetPart(context.Background(), id).Return(repository.Part{}, repository.ErrNotFound)
 
 	svc := service.NewService(repo)
 
@@ -75,8 +75,8 @@ func TestService_ListParts_ByUUIDs_PreservesOrder(t *testing.T) {
 	part2 := samplePart(id2, "Hull", inventoryv1.PartType_PART_TYPE_HULL)
 
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().GetPart(id1).Return(part1, true)
-	repo.EXPECT().GetPart(id2).Return(part2, true)
+	repo.EXPECT().GetPart(context.Background(), id1).Return(part1, nil)
+	repo.EXPECT().GetPart(context.Background(), id2).Return(part2, nil)
 
 	svc := service.NewService(repo)
 
@@ -99,7 +99,7 @@ func TestService_ListParts_ByUUIDs_NotFound(t *testing.T) {
 	id := uuid.New()
 
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().GetPart(id).Return(repository.Part{}, false)
+	repo.EXPECT().GetPart(context.Background(), id).Return(repository.Part{}, repository.ErrNotFound)
 
 	svc := service.NewService(repo)
 
@@ -113,7 +113,7 @@ func TestService_ListParts_ByType_FiltersAndSorts(t *testing.T) {
 	otherHull := samplePart(uuid.New(), "Alpha Hull", inventoryv1.PartType_PART_TYPE_HULL)
 
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().ListParts().Return([]repository.Part{hull, engine, otherHull})
+	repo.EXPECT().ListParts(context.Background()).Return([]repository.Part{hull, engine, otherHull}, nil)
 
 	svc := service.NewService(repo)
 
@@ -129,7 +129,7 @@ func TestService_ListParts_All_SortedByName(t *testing.T) {
 	engine := samplePart(uuid.New(), "Alpha Engine", inventoryv1.PartType_PART_TYPE_ENGINE)
 
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().ListParts().Return([]repository.Part{hull, engine})
+	repo.EXPECT().ListParts(context.Background()).Return([]repository.Part{hull, engine}, nil)
 
 	svc := service.NewService(repo)
 

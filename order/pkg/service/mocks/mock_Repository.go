@@ -5,6 +5,8 @@
 package mocks
 
 import (
+	"context"
+
 	"github.com/google/uuid"
 	"github.com/omaigo88/order/pkg/repository"
 	mock "github.com/stretchr/testify/mock"
@@ -38,27 +40,27 @@ func (_m *MockRepository) EXPECT() *MockRepository_Expecter {
 }
 
 // Get provides a mock function for the type MockRepository
-func (_mock *MockRepository) Get(id uuid.UUID) (repository.Order, bool) {
-	ret := _mock.Called(id)
+func (_mock *MockRepository) Get(ctx context.Context, id uuid.UUID) (repository.Order, error) {
+	ret := _mock.Called(ctx, id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Get")
 	}
 
 	var r0 repository.Order
-	var r1 bool
-	if returnFunc, ok := ret.Get(0).(func(uuid.UUID) (repository.Order, bool)); ok {
-		return returnFunc(id)
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uuid.UUID) (repository.Order, error)); ok {
+		return returnFunc(ctx, id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(uuid.UUID) repository.Order); ok {
-		r0 = returnFunc(id)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uuid.UUID) repository.Order); ok {
+		r0 = returnFunc(ctx, id)
 	} else {
 		r0 = ret.Get(0).(repository.Order)
 	}
-	if returnFunc, ok := ret.Get(1).(func(uuid.UUID) bool); ok {
-		r1 = returnFunc(id)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, uuid.UUID) error); ok {
+		r1 = returnFunc(ctx, id)
 	} else {
-		r1 = ret.Get(1).(bool)
+		r1 = ret.Error(1)
 	}
 	return r0, r1
 }
@@ -69,38 +71,55 @@ type MockRepository_Get_Call struct {
 }
 
 // Get is a helper method to define mock.On call
+//   - ctx context.Context
 //   - id uuid.UUID
-func (_e *MockRepository_Expecter) Get(id interface{}) *MockRepository_Get_Call {
-	return &MockRepository_Get_Call{Call: _e.mock.On("Get", id)}
+func (_e *MockRepository_Expecter) Get(ctx interface{}, id interface{}) *MockRepository_Get_Call {
+	return &MockRepository_Get_Call{Call: _e.mock.On("Get", ctx, id)}
 }
 
-func (_c *MockRepository_Get_Call) Run(run func(id uuid.UUID)) *MockRepository_Get_Call {
+func (_c *MockRepository_Get_Call) Run(run func(ctx context.Context, id uuid.UUID)) *MockRepository_Get_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 uuid.UUID
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(uuid.UUID)
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 uuid.UUID
+		if args[1] != nil {
+			arg1 = args[1].(uuid.UUID)
 		}
 		run(
 			arg0,
+			arg1,
 		)
 	})
 	return _c
 }
 
-func (_c *MockRepository_Get_Call) Return(order repository.Order, b bool) *MockRepository_Get_Call {
-	_c.Call.Return(order, b)
+func (_c *MockRepository_Get_Call) Return(order repository.Order, err error) *MockRepository_Get_Call {
+	_c.Call.Return(order, err)
 	return _c
 }
 
-func (_c *MockRepository_Get_Call) RunAndReturn(run func(id uuid.UUID) (repository.Order, bool)) *MockRepository_Get_Call {
+func (_c *MockRepository_Get_Call) RunAndReturn(run func(ctx context.Context, id uuid.UUID) (repository.Order, error)) *MockRepository_Get_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Save provides a mock function for the type MockRepository
-func (_mock *MockRepository) Save(order repository.Order) {
-	_mock.Called(order)
-	return
+func (_mock *MockRepository) Save(ctx context.Context, order repository.Order) error {
+	ret := _mock.Called(ctx, order)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Save")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, repository.Order) error); ok {
+		r0 = returnFunc(ctx, order)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
 }
 
 // MockRepository_Save_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Save'
@@ -109,30 +128,36 @@ type MockRepository_Save_Call struct {
 }
 
 // Save is a helper method to define mock.On call
+//   - ctx context.Context
 //   - order repository.Order
-func (_e *MockRepository_Expecter) Save(order interface{}) *MockRepository_Save_Call {
-	return &MockRepository_Save_Call{Call: _e.mock.On("Save", order)}
+func (_e *MockRepository_Expecter) Save(ctx interface{}, order interface{}) *MockRepository_Save_Call {
+	return &MockRepository_Save_Call{Call: _e.mock.On("Save", ctx, order)}
 }
 
-func (_c *MockRepository_Save_Call) Run(run func(order repository.Order)) *MockRepository_Save_Call {
+func (_c *MockRepository_Save_Call) Run(run func(ctx context.Context, order repository.Order)) *MockRepository_Save_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 repository.Order
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(repository.Order)
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 repository.Order
+		if args[1] != nil {
+			arg1 = args[1].(repository.Order)
 		}
 		run(
 			arg0,
+			arg1,
 		)
 	})
 	return _c
 }
 
-func (_c *MockRepository_Save_Call) Return() *MockRepository_Save_Call {
-	_c.Call.Return()
+func (_c *MockRepository_Save_Call) Return(err error) *MockRepository_Save_Call {
+	_c.Call.Return(err)
 	return _c
 }
 
-func (_c *MockRepository_Save_Call) RunAndReturn(run func(order repository.Order)) *MockRepository_Save_Call {
-	_c.Run(run)
+func (_c *MockRepository_Save_Call) RunAndReturn(run func(ctx context.Context, order repository.Order) error) *MockRepository_Save_Call {
+	_c.Call.Return(run)
 	return _c
 }

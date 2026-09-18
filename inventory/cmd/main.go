@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
@@ -22,6 +23,15 @@ import (
 const grpcAddress = ":50051"
 
 func main() {
+	ctx := context.Background()
+
+	pool, err := pgxpool.New(ctx, os.Getenv("DB_URI"))
+	if err != nil {
+		slog.Error("failed to create Postgres pool", "error", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
 	lis, err := net.Listen("tcp", grpcAddress)
 	if err != nil {
 		slog.Error("failed to create listener", "error", err)
@@ -39,7 +49,7 @@ func main() {
 			PermitWithoutStream: true,
 		}),
 	)
-	repo := inventoryRepository.NewMemoryRepository()
+	repo := inventoryRepository.NewPostgresRepository(pool)
 	svc := inventoryService.NewService(repo)
 	inventoryv1.RegisterInventoryServiceServer(grpcServer, inventoryAPI.NewServer(svc))
 

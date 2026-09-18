@@ -10,6 +10,7 @@ vars:
   PROTOC_GEN_GO_GRPC_VERSION: 'v1.6.1'
   OGEN_VERSION: 'v1.20.3'
   MOCKERY_VERSION: 'v3.7.0'
+  GOOSE_VERSION: 'v3.28.0'
 
   BIN_DIR: '{{.ROOT_DIR}}/bin'
   GOLANGCI_LINT: '{{.BIN_DIR}}/golangci-lint'
@@ -20,6 +21,7 @@ vars:
   PROTOC_GEN_GO_GRPC: '{{.BIN_DIR}}/protoc-gen-go-grpc'
   OGEN: '{{.BIN_DIR}}/ogen'
   MOCKERY: '{{.BIN_DIR}}/mockery'
+  GOOSE: '{{.BIN_DIR}}/goose'
 
   COVERAGE_DIR: '{{.ROOT_DIR}}/coverage'
   COVERAGE_FILE: '{{.COVERAGE_DIR}}/coverage.out'
@@ -89,9 +91,17 @@ tasks:
       - echo '🧪 Generating mocks...'
       - '{{.MOCKERY}}'
 
+  goose:install:
+    desc: "Installs goose (DB migrations)"
+    cmds:
+      - echo '📦 Installing goose...'
+      - GOBIN={{.BIN_DIR}} go install github.com/pressly/goose/v3/cmd/goose@{{.GOOSE_VERSION}}
+    status:
+      - test -x {{.GOOSE}}
+
   setup:
     desc: "Installs all tools"
-    deps: [formatters:install, golangci-lint:install, buf:install, proto:install-plugins, ogen:install, mockery:install]
+    deps: [formatters:install, golangci-lint:install, buf:install, proto:install-plugins, ogen:install, mockery:install, goose:install]
 
   format:
     desc: "Formats the code (gofumpt + gci)"
@@ -180,6 +190,69 @@ tasks:
     dir: order
     cmds:
       - go run ./cmd
+
+  up:
+    desc: "Build and start the whole infrastructure (Order, Inventory, Payment + their Postgres instances)"
+    dir: deploy/compose
+    cmds:
+      - echo "[task] 📦 Starting the infrastructure"
+      - docker compose --env-file ../../order.env --env-file ../../inventory.env up --build --detach
+
+  stop:
+    desc: "Stop the infrastructure without removing containers/volumes"
+    dir: deploy/compose
+    cmds:
+      - echo "[task] ⏸️  Stopping the infrastructure"
+      - docker compose --env-file ../../order.env --env-file ../../inventory.env stop
+
+  down:
+    desc: "Stop and remove the infrastructure (containers, networks, volumes)"
+    dir: deploy/compose
+    cmds:
+      - echo "[task] 🛑 Removing the infrastructure"
+      - docker compose --env-file ../../order.env --env-file ../../inventory.env down --volumes
+
+  migrate:order:up:
+    desc: "Applies all Order service migrations"
+    deps: [goose:install]
+    dotenv: ['order.env']
+    cmds:
+      - '{{.GOOSE}} -dir $MIGRATIONS_DIR postgres "$DB_URI" up'
+
+  migrate:order:down:
+    desc: "Rolls back the last Order service migration"
+    deps: [goose:install]
+    dotenv: ['order.env']
+    cmds:
+      - '{{.GOOSE}} -dir $MIGRATIONS_DIR postgres "$DB_URI" down'
+
+  migrate:order:status:
+    desc: "Shows the Order service migration status"
+    deps: [goose:install]
+    dotenv: ['order.env']
+    cmds:
+      - '{{.GOOSE}} -dir $MIGRATIONS_DIR postgres "$DB_URI" status'
+
+  migrate:inventory:up:
+    desc: "Applies all Inventory service migrations"
+    deps: [goose:install]
+    dotenv: ['inventory.env']
+    cmds:
+      - '{{.GOOSE}} -dir $MIGRATIONS_DIR postgres "$DB_URI" up'
+
+  migrate:inventory:down:
+    desc: "Rolls back the last Inventory service migration"
+    deps: [goose:install]
+    dotenv: ['inventory.env']
+    cmds:
+      - '{{.GOOSE}} -dir $MIGRATIONS_DIR postgres "$DB_URI" down'
+
+  migrate:inventory:status:
+    desc: "Shows the Inventory service migration status"
+    deps: [goose:install]
+    dotenv: ['inventory.env']
+    cmds:
+      - '{{.GOOSE}} -dir $MIGRATIONS_DIR postgres "$DB_URI" status'
 
   test:
     desc: "Runs unit tests with the race detector (excluding API tests from order/tests)"

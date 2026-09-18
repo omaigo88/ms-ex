@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"context"
+
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -86,17 +88,21 @@ func NewMemoryRepository() Repository {
 }
 
 // GetPart returns a part by UUID.
-func (r *memoryRepository) GetPart(id uuid.UUID) (Part, bool) {
+func (r *memoryRepository) GetPart(_ context.Context, id uuid.UUID) (Part, error) {
 	part, ok := r.parts[id]
-	return part, ok
+	if !ok {
+		return Part{}, ErrNotFound
+	}
+
+	return part, nil
 }
 
 // ListParts returns every part in the catalog.
-func (r *memoryRepository) ListParts() []Part {
+func (r *memoryRepository) ListParts(_ context.Context) ([]Part, error) {
 	parts := make([]Part, 0, len(r.parts))
 	for _, part := range r.parts {
 		parts = append(parts, part)
 	}
 
-	return parts
+	return parts, nil
 }

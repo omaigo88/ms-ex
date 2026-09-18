@@ -1,0 +1,84 @@
+# Single compose file for the whole infrastructure: Order, Inventory,
+# Payment, and Order/Inventory's own Postgres instances. All services share
+# the project's default network and reach each other by service name
+# (e.g. Order calls Inventory at "inventory:50051") — no external network or
+# host.docker.internal hack needed since everything lives in one project.
+name: ms-ex
+
+services:
+  order:
+    build:
+      context: ../..
+      dockerfile: order/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      # In-network DSN: "localhost" inside this container is the container
+      # itself, not the order-postgres container, so this is built from the
+      # ORDER_POSTGRES_* vars rather than reusing order.env's host-side DB_URI.
+      DB_URI: postgres://${ORDER_POSTGRES_USER}:${ORDER_POSTGRES_PASSWORD}@order-postgres:5432/${ORDER_POSTGRES_DB}?sslmode=disable
+      INVENTORY_SERVICE_ADDRESS: ${INVENTORY_SERVICE_ADDRESS}
+      PAYMENT_SERVICE_ADDRESS: ${PAYMENT_SERVICE_ADDRESS}
+    depends_on:
+      order-postgres:
+        condition: service_healthy
+      inventory:
+        condition: service_started
+      payment:
+        condition: service_started
+
+  order-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${ORDER_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${ORDER_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${ORDER_POSTGRES_DB}
+    ports:
+      - "${ORDER_POSTGRES_PORT}:5432"
+    volumes:
+      - order-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ORDER_POSTGRES_USER} -d ${ORDER_POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  inventory:
+    build:
+      context: ../..
+      dockerfile: inventory/Dockerfile
+    ports:
+      - "50051:50051"
+    environment:
+      # In-network DSN, see the note on order's DB_URI above.
+      DB_URI: postgres://${INVENTORY_POSTGRES_USER}:${INVENTORY_POSTGRES_PASSWORD}@inventory-postgres:5432/${INVENTORY_POSTGRES_DB}?sslmode=disable
+    depends_on:
+      inventory-postgres:
+        condition: service_healthy
+
+  inventory-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${INVENTORY_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${INVENTORY_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${INVENTORY_POSTGRES_DB}
+    ports:
+      - "${INVENTORY_POSTGRES_PORT}:5432"
+    volumes:
+      - inventory-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${INVENTORY_POSTGRES_USER} -d ${INVENTORY_POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  payment:
+    build:
+      context: ../..
+      dockerfile: payment/Dockerfile
+    ports:
+      - "50052:50052"
+
+volumes:
+  order-postgres-data:
+  inventory-postgres-data:

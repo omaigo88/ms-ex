@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"sync"
 
 	"github.com/google/uuid"
@@ -20,19 +21,24 @@ func NewMemoryRepository() Repository {
 }
 
 // Save creates or updates an order.
-func (r *memoryRepository) Save(order Order) {
+func (r *memoryRepository) Save(_ context.Context, order Order) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	r.orders[order.OrderUUID] = order
+
+	return nil
 }
 
 // Get returns an order by UUID.
-func (r *memoryRepository) Get(id uuid.UUID) (Order, bool) {
+func (r *memoryRepository) Get(_ context.Context, id uuid.UUID) (Order, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	order, ok := r.orders[id]
+	if !ok {
+		return Order{}, ErrNotFound
+	}
 
-	return order, ok
+	return order, nil
 }

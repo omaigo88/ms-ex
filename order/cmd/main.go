@@ -10,6 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	trmpgx "github.com/avito-tech/go-transaction-manager/drivers/pgxv5/v2"
+	"github.com/avito-tech/go-transaction-manager/trm/v2/manager"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
@@ -22,9 +25,18 @@ import (
 )
 
 const (
-	inventoryServiceAddress = "localhost:50051"
-	paymentServiceAddress   = "localhost:50052"
+	defaultInventoryServiceAddress = "localhost:50051"
+	defaultPaymentServiceAddress   = "localhost:50052"
 )
+
+// getEnv returns the environment variable named by key, or fallback if unset/empty.
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+
+	return fallback
+}
 
 var grpcKeepaliveParams = grpc.WithKeepaliveParams(keepalive.ClientParameters{
 	Time:                30 * time.Second,
@@ -33,9 +45,20 @@ var grpcKeepaliveParams = grpc.WithKeepaliveParams(keepalive.ClientParameters{
 })
 
 func main() {
+	ctx := context.Background()
+
+	pool, err := pgxpool.New(ctx, os.Getenv("DB_URI"))
+	if err != nil {
+		slog.Error("failed to create Postgres pool", "error", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	trManager := manager.Must(trmpgx.NewDefaultFactory(pool))
+
 	// Create a gRPC connection to InventoryService
 	inventoryConn, err := grpc.NewClient(
-		inventoryServiceAddress,
+		getEnv("INVENTORY_SERVICE_ADDRESS", defaultInventoryServiceAddress),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpcKeepaliveParams,
 	)
@@ -47,7 +70,7 @@ func main() {
 
 	// Create a gRPC connection to PaymentService
 	paymentConn, err := grpc.NewClient(
-		paymentServiceAddress,
+		getEnv("PAYMENT_SERVICE_ADDRESS", defaultPaymentServiceAddress),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpcKeepaliveParams,
 	)
@@ -58,11 +81,12 @@ func main() {
 	defer func() { _ = paymentConn.Close() }()
 
 	// Create the repository, service and handler
-	repo := orderRepository.NewMemoryRepository()
+	repo := orderRepository.NewPostgresRepository(pool)
 	svc := orderService.NewService(
 		inventoryv1.NewInventoryServiceClient(inventoryConn),
 		paymentv1.NewPaymentServiceClient(paymentConn),
 		repo,
+		trManager,
 	)
 	h := orderAPI.NewHandler(svc)
 

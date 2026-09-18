@@ -146,7 +146,7 @@ func TestMain(m *testing.M) {
 
 	// 3. Order HTTP via httptest
 	orderRepo := orderRepository.NewMemoryRepository()
-	orderSvc := orderService.NewService(inventoryClient, paymentClient, orderRepo)
+	orderSvc := orderService.NewService(inventoryClient, paymentClient, orderRepo, orderService.NewNoopTrManager())
 	h := orderAPI.NewHandler(orderSvc)
 	orderServer, err := orderAPI.SetupServer(h)
 	if err != nil {

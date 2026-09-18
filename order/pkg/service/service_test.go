@@ -37,9 +37,9 @@ func TestService_CreateOrder_Success(t *testing.T) {
 
 	pay := mocks.NewMockPaymentClient(t)
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Save(mock.Anything).Return()
+	repo.EXPECT().Save(context.Background(), mock.Anything).Return(nil)
 
-	svc := service.NewService(inv, pay, repo)
+	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
 
 	order, err := svc.CreateOrder(context.Background(), service.CreateOrderInput{
 		HullUUID:   hullUUID,
@@ -61,7 +61,7 @@ func TestService_CreateOrder_ComponentNotFound(t *testing.T) {
 	pay := mocks.NewMockPaymentClient(t)
 	repo := mocks.NewMockRepository(t)
 
-	svc := service.NewService(inv, pay, repo)
+	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
 
 	_, err := svc.CreateOrder(context.Background(), service.CreateOrderInput{
 		HullUUID:   hullUUID,
@@ -86,7 +86,7 @@ func TestService_CreateOrder_OutOfStock(t *testing.T) {
 	pay := mocks.NewMockPaymentClient(t)
 	repo := mocks.NewMockRepository(t)
 
-	svc := service.NewService(inv, pay, repo)
+	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
 
 	_, err := svc.CreateOrder(context.Background(), service.CreateOrderInput{
 		HullUUID:   hullUUID,
@@ -102,9 +102,9 @@ func TestService_GetOrder_Success(t *testing.T) {
 	inv := mocks.NewMockInventoryClient(t)
 	pay := mocks.NewMockPaymentClient(t)
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(id).Return(want, true)
+	repo.EXPECT().Get(context.Background(), id).Return(want, nil)
 
-	svc := service.NewService(inv, pay, repo)
+	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
 
 	got, err := svc.GetOrder(context.Background(), id)
 	require.NoError(t, err)
@@ -117,9 +117,9 @@ func TestService_GetOrder_NotFound(t *testing.T) {
 	inv := mocks.NewMockInventoryClient(t)
 	pay := mocks.NewMockPaymentClient(t)
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(id).Return(repository.Order{}, false)
+	repo.EXPECT().Get(context.Background(), id).Return(repository.Order{}, repository.ErrNotFound)
 
-	svc := service.NewService(inv, pay, repo)
+	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
 
 	_, err := svc.GetOrder(context.Background(), id)
 	require.ErrorIs(t, err, service.ErrOrderNotFound)
@@ -141,10 +141,10 @@ func TestService_PayOrder_Success(t *testing.T) {
 		Return(&paymentv1.PayOrderResponse{TransactionUuid: transactionUUID.String()}, nil)
 
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(id).Return(existing, true)
-	repo.EXPECT().Save(mock.Anything).Return()
+	repo.EXPECT().Get(context.Background(), id).Return(existing, nil)
+	repo.EXPECT().Save(context.Background(), mock.Anything).Return(nil)
 
-	svc := service.NewService(inv, pay, repo)
+	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
 
 	order, err := svc.PayOrder(context.Background(), id, repository.PaymentMethodCard)
 	require.NoError(t, err)
@@ -159,9 +159,9 @@ func TestService_PayOrder_NotFound(t *testing.T) {
 	inv := mocks.NewMockInventoryClient(t)
 	pay := mocks.NewMockPaymentClient(t)
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(id).Return(repository.Order{}, false)
+	repo.EXPECT().Get(context.Background(), id).Return(repository.Order{}, repository.ErrNotFound)
 
-	svc := service.NewService(inv, pay, repo)
+	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
 
 	_, err := svc.PayOrder(context.Background(), id, repository.PaymentMethodCard)
 	require.ErrorIs(t, err, service.ErrOrderNotFound)
@@ -174,9 +174,9 @@ func TestService_PayOrder_AlreadyFinal(t *testing.T) {
 	inv := mocks.NewMockInventoryClient(t)
 	pay := mocks.NewMockPaymentClient(t)
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(id).Return(existing, true)
+	repo.EXPECT().Get(context.Background(), id).Return(existing, nil)
 
-	svc := service.NewService(inv, pay, repo)
+	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
 
 	_, err := svc.PayOrder(context.Background(), id, repository.PaymentMethodCard)
 	require.ErrorIs(t, err, service.ErrOrderAlreadyFinal)
@@ -189,10 +189,10 @@ func TestService_CancelOrder_Success(t *testing.T) {
 	inv := mocks.NewMockInventoryClient(t)
 	pay := mocks.NewMockPaymentClient(t)
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(id).Return(existing, true)
-	repo.EXPECT().Save(mock.Anything).Return()
+	repo.EXPECT().Get(context.Background(), id).Return(existing, nil)
+	repo.EXPECT().Save(context.Background(), mock.Anything).Return(nil)
 
-	svc := service.NewService(inv, pay, repo)
+	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
 
 	order, err := svc.CancelOrder(context.Background(), id)
 	require.NoError(t, err)
@@ -205,9 +205,9 @@ func TestService_CancelOrder_NotFound(t *testing.T) {
 	inv := mocks.NewMockInventoryClient(t)
 	pay := mocks.NewMockPaymentClient(t)
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(id).Return(repository.Order{}, false)
+	repo.EXPECT().Get(context.Background(), id).Return(repository.Order{}, repository.ErrNotFound)
 
-	svc := service.NewService(inv, pay, repo)
+	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
 
 	_, err := svc.CancelOrder(context.Background(), id)
 	require.ErrorIs(t, err, service.ErrOrderNotFound)
@@ -220,9 +220,9 @@ func TestService_CancelOrder_AlreadyFinal(t *testing.T) {
 	inv := mocks.NewMockInventoryClient(t)
 	pay := mocks.NewMockPaymentClient(t)
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(id).Return(existing, true)
+	repo.EXPECT().Get(context.Background(), id).Return(existing, nil)
 
-	svc := service.NewService(inv, pay, repo)
+	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
 
 	_, err := svc.CancelOrder(context.Background(), id)
 	require.ErrorIs(t, err, service.ErrOrderAlreadyFinal)

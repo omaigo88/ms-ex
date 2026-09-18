@@ -40,8 +40,8 @@ type PaymentClient interface {
 
 // Repository is the persistence dependency required by Service.
 type Repository interface {
-	Save(order repository.Order)
-	Get(id uuid.UUID) (repository.Order, bool)
+	Save(ctx context.Context, order repository.Order) error
+	Get(ctx context.Context, id uuid.UUID) (repository.Order, error)
 }
 
 // CreateOrderInput holds the parameters for creating an order.
@@ -57,14 +57,16 @@ type Service struct {
 	inventoryClient InventoryClient
 	paymentClient   PaymentClient
 	repo            Repository
+	trManager       TrManager
 }
 
 // NewService creates a new Service.
-func NewService(inventoryClient InventoryClient, paymentClient PaymentClient, repo Repository) *Service {
+func NewService(inventoryClient InventoryClient, paymentClient PaymentClient, repo Repository, trManager TrManager) *Service {
 	return &Service{
 		inventoryClient: inventoryClient,
 		paymentClient:   paymentClient,
 		repo:            repo,
+		trManager:       trManager,
 	}
 }
 
@@ -127,16 +129,24 @@ func (s *Service) CreateOrder(ctx context.Context, input CreateOrderInput) (repo
 		CreatedAt:  time.Now(),
 	}
 
-	s.repo.Save(order)
+	if err := s.trManager.Do(ctx, func(ctx context.Context) error {
+		return s.repo.Save(ctx, order)
+	}); err != nil {
+		return repository.Order{}, err
+	}
 
 	return order, nil
 }
 
 // GetOrder returns an order by UUID.
-func (s *Service) GetOrder(_ context.Context, id uuid.UUID) (repository.Order, error) {
-	order, ok := s.repo.Get(id)
-	if !ok {
+func (s *Service) GetOrder(ctx context.Context, id uuid.UUID) (repository.Order, error) {
+	order, err := s.repo.Get(ctx, id)
+	if errors.Is(err, repository.ErrNotFound) {
 		return repository.Order{}, fmt.Errorf("%w: %s", ErrOrderNotFound, id)
+	}
+
+	if err != nil {
+		return repository.Order{}, err
 	}
 
 	return order, nil
@@ -144,9 +154,13 @@ func (s *Service) GetOrder(_ context.Context, id uuid.UUID) (repository.Order, e
 
 // PayOrder pays for a pending order and returns the updated order.
 func (s *Service) PayOrder(ctx context.Context, id uuid.UUID, method repository.PaymentMethod) (repository.Order, error) {
-	order, ok := s.repo.Get(id)
-	if !ok {
+	order, err := s.repo.Get(ctx, id)
+	if errors.Is(err, repository.ErrNotFound) {
 		return repository.Order{}, fmt.Errorf("%w: %s", ErrOrderNotFound, id)
+	}
+
+	if err != nil {
+		return repository.Order{}, err
 	}
 
 	if order.Status != repository.OrderStatusPendingPayment {
@@ -169,16 +183,25 @@ func (s *Service) PayOrder(ctx context.Context, id uuid.UUID, method repository.
 	order.Status = repository.OrderStatusPaid
 	order.TransactionUUID = &transactionUUID
 	order.PaymentMethod = &method
-	s.repo.Save(order)
+
+	if err := s.trManager.Do(ctx, func(ctx context.Context) error {
+		return s.repo.Save(ctx, order)
+	}); err != nil {
+		return repository.Order{}, err
+	}
 
 	return order, nil
 }
 
 // CancelOrder cancels a pending order and returns the updated order.
-func (s *Service) CancelOrder(_ context.Context, id uuid.UUID) (repository.Order, error) {
-	order, ok := s.repo.Get(id)
-	if !ok {
+func (s *Service) CancelOrder(ctx context.Context, id uuid.UUID) (repository.Order, error) {
+	order, err := s.repo.Get(ctx, id)
+	if errors.Is(err, repository.ErrNotFound) {
 		return repository.Order{}, fmt.Errorf("%w: %s", ErrOrderNotFound, id)
+	}
+
+	if err != nil {
+		return repository.Order{}, err
 	}
 
 	if order.Status != repository.OrderStatusPendingPayment {
@@ -186,7 +209,12 @@ func (s *Service) CancelOrder(_ context.Context, id uuid.UUID) (repository.Order
 	}
 
 	order.Status = repository.OrderStatusCancelled
-	s.repo.Save(order)
+
+	if err := s.trManager.Do(ctx, func(ctx context.Context) error {
+		return s.repo.Save(ctx, order)
+	}); err != nil {
+		return repository.Order{}, err
+	}
 
 	return order, nil
 }

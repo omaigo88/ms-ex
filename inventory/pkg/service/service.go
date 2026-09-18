@@ -24,8 +24,8 @@ var (
 
 // Repository is the persistence dependency required by Service.
 type Repository interface {
-	GetPart(id uuid.UUID) (repository.Part, bool)
-	ListParts() []repository.Part
+	GetPart(ctx context.Context, id uuid.UUID) (repository.Part, error)
+	ListParts(ctx context.Context) ([]repository.Part, error)
 }
 
 // Service implements the InventoryService business logic.
@@ -39,7 +39,7 @@ func NewService(repo Repository) *Service {
 }
 
 // GetPart returns a part by its raw UUID string.
-func (s *Service) GetPart(_ context.Context, rawUUID string) (repository.Part, error) {
+func (s *Service) GetPart(ctx context.Context, rawUUID string) (repository.Part, error) {
 	if rawUUID == "" {
 		return repository.Part{}, ErrEmptyUUID
 	}
@@ -49,9 +49,13 @@ func (s *Service) GetPart(_ context.Context, rawUUID string) (repository.Part, e
 		return repository.Part{}, fmt.Errorf("%w: %s", ErrInvalidUUID, rawUUID)
 	}
 
-	part, ok := s.repo.GetPart(id)
-	if !ok {
+	part, err := s.repo.GetPart(ctx, id)
+	if errors.Is(err, repository.ErrNotFound) {
 		return repository.Part{}, fmt.Errorf("%w: %s", ErrPartNotFound, rawUUID)
+	}
+
+	if err != nil {
+		return repository.Part{}, err
 	}
 
 	return part, nil
@@ -60,7 +64,7 @@ func (s *Service) GetPart(_ context.Context, rawUUID string) (repository.Part, e
 // ListParts returns parts filtered by uuids (order preserved, partType ignored) or,
 // when uuids is empty, filtered by partType (or all parts, sorted by name).
 func (s *Service) ListParts(
-	_ context.Context,
+	ctx context.Context,
 	partType inventoryv1.PartType,
 	rawUUIDs []string,
 ) ([]repository.Part, error) {
@@ -73,9 +77,13 @@ func (s *Service) ListParts(
 				return nil, fmt.Errorf("%w: %s", ErrInvalidUUID, rawUUID)
 			}
 
-			part, ok := s.repo.GetPart(id)
-			if !ok {
+			part, err := s.repo.GetPart(ctx, id)
+			if errors.Is(err, repository.ErrNotFound) {
 				return nil, fmt.Errorf("%w: %s", ErrPartNotFound, rawUUID)
+			}
+
+			if err != nil {
+				return nil, err
 			}
 
 			parts = append(parts, part)
@@ -84,7 +92,11 @@ func (s *Service) ListParts(
 		return parts, nil
 	}
 
-	all := s.repo.ListParts()
+	all, err := s.repo.ListParts(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	parts := make([]repository.Part, 0, len(all))
 
 	for _, part := range all {

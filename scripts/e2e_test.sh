@@ -1,8 +1,9 @@
 #!/bin/bash
 #
-# End-to-end smoke test: builds all three services, runs them as real
-# standalone processes (real TCP sockets, no bufconn/httptest), drives the
-# Order HTTP API with curl, and asserts on status codes and response bodies.
+# End-to-end smoke test: brings up the real Docker stack (Order, Inventory,
+# Payment, and Order/Inventory's own Postgres instances, via the single
+# deploy/compose/docker-compose.yaml), applies migrations, and drives the
+# Order HTTP API with curl, asserting on status codes and response bodies.
 #
 # Usage: scripts/e2e_test.sh
 # (also wired up as `task test:e2e`)
@@ -10,15 +11,13 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK_DIR="$(mktemp -d /tmp/ms-ex-e2e.XXXXXX)"
 BASE_URL="http://localhost:8080"
 
-INVENTORY_PID=""
-PAYMENT_PID=""
-ORDER_PID=""
 FAILURES=0
+STACK_UP=0
 
-# Seed data from inventory/pkg/repository/memory.go — keep in sync if it changes.
+# Seed data from inventory/migrations/00001_create_parts_table.sql — keep in
+# sync if it changes.
 HULL_ALUMINUM=550e8400-e29b-41d4-a716-446655440001
 HULL_TITANIUM=550e8400-e29b-41d4-a716-446655440002
 ENGINE_ION_C=550e8400-e29b-41d4-a716-446655440003
@@ -29,19 +28,16 @@ RANDOM_UUID=00000000-0000-4000-8000-000000000000
 
 cleanup() {
 	echo
-	echo "==> Stopping services..."
-	for pid in "$ORDER_PID" "$PAYMENT_PID" "$INVENTORY_PID"; do
-		if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-			kill "$pid" 2>/dev/null
-		fi
-	done
-	rm -rf "$WORK_DIR"
+	echo "==> Stopping the infrastructure..."
+	if [ "$STACK_UP" -eq 1 ]; then
+		task -d "$REPO_ROOT" down >/dev/null 2>&1
+	fi
 }
 trap cleanup EXIT
 
 wait_for_port() {
 	local port="$1" name="$2"
-	for _ in $(seq 1 50); do
+	for _ in $(seq 1 100); do
 		if curl -s -o /dev/null "http://localhost:$port" 2>/dev/null; then
 			return 0
 		fi
@@ -84,27 +80,17 @@ assert_status() {
 	LAST_BODY="$actual_body"
 }
 
-echo "==> Building services..."
-go -C "$REPO_ROOT" build -o "$WORK_DIR/inventory" ./inventory/cmd || exit 1
-go -C "$REPO_ROOT" build -o "$WORK_DIR/payment" ./payment/cmd || exit 1
-go -C "$REPO_ROOT" build -o "$WORK_DIR/order" ./order/cmd || exit 1
-
-echo "==> Starting InventoryService (:50051)..."
-"$WORK_DIR/inventory" >"$WORK_DIR/inventory.log" 2>&1 &
-INVENTORY_PID=$!
-
-echo "==> Starting PaymentService (:50052)..."
-"$WORK_DIR/payment" >"$WORK_DIR/payment.log" 2>&1 &
-PAYMENT_PID=$!
+echo "==> Starting the infrastructure (Order, Inventory, Payment + Postgres)..."
+task -d "$REPO_ROOT" up || exit 1
+STACK_UP=1
 
 wait_for_port 50051 InventoryService || exit 1
 wait_for_port 50052 PaymentService || exit 1
-
-echo "==> Starting OrderService (:8080)..."
-"$WORK_DIR/order" >"$WORK_DIR/order.log" 2>&1 &
-ORDER_PID=$!
-
 wait_for_port 8080 OrderService || exit 1
+
+echo "==> Applying migrations..."
+task -d "$REPO_ROOT" migrate:inventory:up || exit 1
+task -d "$REPO_ROOT" migrate:order:up || exit 1
 
 echo
 echo "==> Running e2e scenarios..."
@@ -139,14 +125,18 @@ assert_status POST /api/v1/orders '{}' 400
 assert_status GET /api/v1/orders/not-a-uuid "" 400
 assert_status POST "/api/v1/orders/$ORDER1/pay" '{"payment_method":"BITCOIN"}' 400
 
+# 17: data survives a container restart (real Postgres persistence)
+docker restart ms-ex-order-1 >/dev/null 2>&1
+wait_for_port 8080 OrderService || exit 1
+assert_status GET "/api/v1/orders/$ORDER1" "" 200 '"status":"PAID"'
+
 echo
 if [ "$FAILURES" -eq 0 ]; then
 	echo "==> All e2e scenarios passed."
 	exit 0
 else
 	echo "==> $FAILURES scenario(s) failed."
-	echo "--- inventory.log ---"; cat "$WORK_DIR/inventory.log"
-	echo "--- payment.log ---"; cat "$WORK_DIR/payment.log"
-	echo "--- order.log ---"; cat "$WORK_DIR/order.log"
+	echo "--- infrastructure logs ---"
+	docker compose -f "$REPO_ROOT/deploy/compose/docker-compose.yaml" logs 2>&1
 	exit 1
 fi

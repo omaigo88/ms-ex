@@ -2,10 +2,15 @@
 package repository
 
 import (
+	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrNotFound is returned when an order does not exist in the repository.
+var ErrNotFound = errors.New("not found")
 
 // OrderStatus — order status.
 type OrderStatus string
@@ -42,6 +47,6 @@ type Order struct {
 
 // Repository provides storage for orders.
 type Repository interface {
-	Save(order Order)
-	Get(id uuid.UUID) (Order, bool)
+	Save(ctx context.Context, order Order) error
+	Get(ctx context.Context, id uuid.UUID) (Order, error)
 }
