@@ -4,29 +4,34 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
-	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
+	"github.com/omaigo88/inventory/pkg/domain"
 )
 
 // ErrNotFound is returned when a part does not exist in the repository.
 var ErrNotFound = errors.New("not found")
 
-// Part represents a spaceship part.
-type Part struct {
-	UUID          string
+// PartRecord mirrors a row of the parts table — the persistence shape,
+// converted to/from the domain.Part entity by RecordToDomain.
+type PartRecord struct {
+	UUID          uuid.UUID
 	Name          string
 	Description   string
-	Price         int64 // in kopecks
-	PartType      inventoryv1.PartType
+	Price         int64
+	PartType      int32
+	Properties    []byte // raw JSON (the properties JSONB column's contents)
 	StockQuantity int64
-	CreatedAt     *timestamppb.Timestamp
+	Reserved      int64
+	CreatedAt     time.Time
 }
 
-// Repository provides read access to the parts catalog.
+// Repository provides access to the parts catalog.
 type Repository interface {
-	GetPart(ctx context.Context, id uuid.UUID) (Part, error)
-	ListParts(ctx context.Context) ([]Part, error)
+	GetPart(ctx context.Context, id uuid.UUID) (domain.Part, error)
+	ListParts(ctx context.Context) ([]domain.Part, error)
+	// Save persists a part's mutable state (its Reserved count).
+	Save(ctx context.Context, part domain.Part) error
 }

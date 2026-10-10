@@ -7,7 +7,7 @@ package mocks
 import (
 	"context"
 
-	"github.com/omaigo88/inventory/pkg/repository"
+	"github.com/omaigo88/inventory/pkg/domain"
 	"github.com/omaigo88/shared/pkg/proto/inventory/v1"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -40,22 +40,22 @@ func (_m *MockService) EXPECT() *MockService_Expecter {
 }
 
 // GetPart provides a mock function for the type MockService
-func (_mock *MockService) GetPart(ctx context.Context, rawUUID string) (repository.Part, error) {
+func (_mock *MockService) GetPart(ctx context.Context, rawUUID string) (domain.Part, error) {
 	ret := _mock.Called(ctx, rawUUID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetPart")
 	}
 
-	var r0 repository.Part
+	var r0 domain.Part
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (repository.Part, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (domain.Part, error)); ok {
 		return returnFunc(ctx, rawUUID)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) repository.Part); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) domain.Part); ok {
 		r0 = returnFunc(ctx, rawUUID)
 	} else {
-		r0 = ret.Get(0).(repository.Part)
+		r0 = ret.Get(0).(domain.Part)
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
 		r1 = returnFunc(ctx, rawUUID)
@@ -95,34 +95,34 @@ func (_c *MockService_GetPart_Call) Run(run func(ctx context.Context, rawUUID st
 	return _c
 }
 
-func (_c *MockService_GetPart_Call) Return(part repository.Part, err error) *MockService_GetPart_Call {
+func (_c *MockService_GetPart_Call) Return(part domain.Part, err error) *MockService_GetPart_Call {
 	_c.Call.Return(part, err)
 	return _c
 }
 
-func (_c *MockService_GetPart_Call) RunAndReturn(run func(ctx context.Context, rawUUID string) (repository.Part, error)) *MockService_GetPart_Call {
+func (_c *MockService_GetPart_Call) RunAndReturn(run func(ctx context.Context, rawUUID string) (domain.Part, error)) *MockService_GetPart_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListParts provides a mock function for the type MockService
-func (_mock *MockService) ListParts(ctx context.Context, partType inventoryv1.PartType, rawUUIDs []string) ([]repository.Part, error) {
+func (_mock *MockService) ListParts(ctx context.Context, partType inventoryv1.PartType, rawUUIDs []string) ([]domain.Part, error) {
 	ret := _mock.Called(ctx, partType, rawUUIDs)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListParts")
 	}
 
-	var r0 []repository.Part
+	var r0 []domain.Part
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, inventoryv1.PartType, []string) ([]repository.Part, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, inventoryv1.PartType, []string) ([]domain.Part, error)); ok {
 		return returnFunc(ctx, partType, rawUUIDs)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, inventoryv1.PartType, []string) []repository.Part); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, inventoryv1.PartType, []string) []domain.Part); ok {
 		r0 = returnFunc(ctx, partType, rawUUIDs)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]repository.Part)
+			r0 = ret.Get(0).([]domain.Part)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, inventoryv1.PartType, []string) error); ok {
@@ -169,12 +169,126 @@ func (_c *MockService_ListParts_Call) Run(run func(ctx context.Context, partType
 	return _c
 }
 
-func (_c *MockService_ListParts_Call) Return(parts []repository.Part, err error) *MockService_ListParts_Call {
+func (_c *MockService_ListParts_Call) Return(parts []domain.Part, err error) *MockService_ListParts_Call {
 	_c.Call.Return(parts, err)
 	return _c
 }
 
-func (_c *MockService_ListParts_Call) RunAndReturn(run func(ctx context.Context, partType inventoryv1.PartType, rawUUIDs []string) ([]repository.Part, error)) *MockService_ListParts_Call {
+func (_c *MockService_ListParts_Call) RunAndReturn(run func(ctx context.Context, partType inventoryv1.PartType, rawUUIDs []string) ([]domain.Part, error)) *MockService_ListParts_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ReleaseParts provides a mock function for the type MockService
+func (_mock *MockService) ReleaseParts(ctx context.Context, rawUUIDs []string) error {
+	ret := _mock.Called(ctx, rawUUIDs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReleaseParts")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []string) error); ok {
+		r0 = returnFunc(ctx, rawUUIDs)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockService_ReleaseParts_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReleaseParts'
+type MockService_ReleaseParts_Call struct {
+	*mock.Call
+}
+
+// ReleaseParts is a helper method to define mock.On call
+//   - ctx context.Context
+//   - rawUUIDs []string
+func (_e *MockService_Expecter) ReleaseParts(ctx interface{}, rawUUIDs interface{}) *MockService_ReleaseParts_Call {
+	return &MockService_ReleaseParts_Call{Call: _e.mock.On("ReleaseParts", ctx, rawUUIDs)}
+}
+
+func (_c *MockService_ReleaseParts_Call) Run(run func(ctx context.Context, rawUUIDs []string)) *MockService_ReleaseParts_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 []string
+		if args[1] != nil {
+			arg1 = args[1].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockService_ReleaseParts_Call) Return(err error) *MockService_ReleaseParts_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockService_ReleaseParts_Call) RunAndReturn(run func(ctx context.Context, rawUUIDs []string) error) *MockService_ReleaseParts_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ReserveParts provides a mock function for the type MockService
+func (_mock *MockService) ReserveParts(ctx context.Context, rawUUIDs []string) error {
+	ret := _mock.Called(ctx, rawUUIDs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReserveParts")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []string) error); ok {
+		r0 = returnFunc(ctx, rawUUIDs)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockService_ReserveParts_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReserveParts'
+type MockService_ReserveParts_Call struct {
+	*mock.Call
+}
+
+// ReserveParts is a helper method to define mock.On call
+//   - ctx context.Context
+//   - rawUUIDs []string
+func (_e *MockService_Expecter) ReserveParts(ctx interface{}, rawUUIDs interface{}) *MockService_ReserveParts_Call {
+	return &MockService_ReserveParts_Call{Call: _e.mock.On("ReserveParts", ctx, rawUUIDs)}
+}
+
+func (_c *MockService_ReserveParts_Call) Run(run func(ctx context.Context, rawUUIDs []string)) *MockService_ReserveParts_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 []string
+		if args[1] != nil {
+			arg1 = args[1].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockService_ReserveParts_Call) Return(err error) *MockService_ReserveParts_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockService_ReserveParts_Call) RunAndReturn(run func(ctx context.Context, rawUUIDs []string) error) *MockService_ReserveParts_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -13,14 +13,15 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 
-	paymentAPI "github.com/omaigo88/payment/pkg/api"
-	paymentService "github.com/omaigo88/payment/pkg/service"
+	"github.com/omaigo88/payment/internal/app"
 	paymentv1 "github.com/omaigo88/shared/pkg/proto/payment/v1"
 )
 
 const grpcAddress = ":50052"
 
 func main() {
+	container := app.New()
+
 	lis, err := net.Listen("tcp", grpcAddress)
 	if err != nil {
 		slog.Error("failed to create listener", "error", err)
@@ -38,8 +39,7 @@ func main() {
 			PermitWithoutStream: true,
 		}),
 	)
-	svc := paymentService.NewService()
-	paymentv1.RegisterPaymentServiceServer(grpcServer, paymentAPI.NewServer(svc))
+	paymentv1.RegisterPaymentServiceServer(grpcServer, container.Server)
 
 	// Enable reflection for postman/grpcurl
 	reflection.Register(grpcServer)

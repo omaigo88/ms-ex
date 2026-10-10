@@ -13,6 +13,14 @@ service InventoryService {
 
   // ListParts returns a list of parts
   rpc ListParts(ListPartsRequest) returns (ListPartsResponse);
+
+  // ReserveParts reserves exactly one unit of every listed part, atomically
+  // as a set (including a cross-part compatibility check).
+  rpc ReserveParts(ReservePartsRequest) returns (ReservePartsResponse);
+
+  // ReleaseParts releases a previous reservation of one unit of every
+  // listed part.
+  rpc ReleaseParts(ReleasePartsRequest) returns (ReleasePartsResponse);
 }
 
 // Part type
@@ -65,3 +73,19 @@ message ListPartsRequest {
 message ListPartsResponse {
   repeated Part parts = 1;
 }
+
+// Request to reserve one unit of each listed part
+message ReservePartsRequest {
+  repeated string uuids = 1;
+}
+
+// Response for a reserve parts request
+message ReservePartsResponse {}
+
+// Request to release one unit of each listed part
+message ReleasePartsRequest {
+  repeated string uuids = 1;
+}
+
+// Response for a release parts request
+message ReleasePartsResponse {}

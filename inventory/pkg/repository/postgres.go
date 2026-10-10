@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
-	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
+	"github.com/omaigo88/inventory/pkg/domain"
 )
 
 // postgresRepository is a PostgreSQL-backed Repository implementation.
@@ -24,41 +22,41 @@ func NewPostgresRepository(pool *pgxpool.Pool) Repository {
 	return &postgresRepository{pool: pool}
 }
 
+func scanPartRecord(row interface{ Scan(...any) error }) (PartRecord, error) {
+	var rec PartRecord
+
+	err := row.Scan(
+		&rec.UUID, &rec.Name, &rec.Description, &rec.Price,
+		&rec.PartType, &rec.Properties, &rec.StockQuantity, &rec.Reserved, &rec.CreatedAt,
+	)
+
+	return rec, err
+}
+
 // GetPart returns a part by UUID.
-func (r *postgresRepository) GetPart(ctx context.Context, id uuid.UUID) (Part, error) {
+func (r *postgresRepository) GetPart(ctx context.Context, id uuid.UUID) (domain.Part, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT uuid, name, description, price, part_type, stock_quantity, created_at
+		SELECT uuid, name, description, price, part_type, properties, stock_quantity, reserved, created_at
 		FROM parts
 		WHERE uuid = $1
 	`, id)
 
-	var (
-		p         Part
-		partUUID  uuid.UUID
-		partType  int32
-		createdAt time.Time
-	)
-
-	err := row.Scan(&partUUID, &p.Name, &p.Description, &p.Price, &partType, &p.StockQuantity, &createdAt)
+	rec, err := scanPartRecord(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Part{}, ErrNotFound
+		return domain.Part{}, ErrNotFound
 	}
 
 	if err != nil {
-		return Part{}, fmt.Errorf("get part: %w", err)
+		return domain.Part{}, fmt.Errorf("get part: %w", err)
 	}
 
-	p.UUID = partUUID.String()
-	p.PartType = inventoryv1.PartType(partType)
-	p.CreatedAt = timestamppb.New(createdAt)
-
-	return p, nil
+	return RecordToDomain(rec)
 }
 
 // ListParts returns every part in the catalog.
-func (r *postgresRepository) ListParts(ctx context.Context) ([]Part, error) {
+func (r *postgresRepository) ListParts(ctx context.Context) ([]domain.Part, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT uuid, name, description, price, part_type, stock_quantity, created_at
+		SELECT uuid, name, description, price, part_type, properties, stock_quantity, reserved, created_at
 		FROM parts
 	`)
 	if err != nil {
@@ -66,24 +64,20 @@ func (r *postgresRepository) ListParts(ctx context.Context) ([]Part, error) {
 	}
 	defer rows.Close()
 
-	var parts []Part
+	var parts []domain.Part
 
 	for rows.Next() {
-		var (
-			p         Part
-			partUUID  uuid.UUID
-			partType  int32
-			createdAt time.Time
-		)
-
-		if scanErr := rows.Scan(&partUUID, &p.Name, &p.Description, &p.Price, &partType, &p.StockQuantity, &createdAt); scanErr != nil {
+		rec, scanErr := scanPartRecord(rows)
+		if scanErr != nil {
 			return nil, fmt.Errorf("list parts: %w", scanErr)
 		}
 
-		p.UUID = partUUID.String()
-		p.PartType = inventoryv1.PartType(partType)
-		p.CreatedAt = timestamppb.New(createdAt)
-		parts = append(parts, p)
+		part, convErr := RecordToDomain(rec)
+		if convErr != nil {
+			return nil, fmt.Errorf("list parts: %w", convErr)
+		}
+
+		parts = append(parts, part)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -91,4 +85,18 @@ func (r *postgresRepository) ListParts(ctx context.Context) ([]Part, error) {
 	}
 
 	return parts, nil
+}
+
+// Save persists part's Reserved count.
+func (r *postgresRepository) Save(ctx context.Context, part domain.Part) error {
+	tag, err := r.pool.Exec(ctx, `UPDATE parts SET reserved = $1 WHERE uuid = $2`, part.Reserved(), part.ID())
+	if err != nil {
+		return fmt.Errorf("save part: %w", err)
+	}
+
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+
+	return nil
 }

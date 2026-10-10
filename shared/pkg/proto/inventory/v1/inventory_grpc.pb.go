@@ -19,8 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	InventoryService_GetPart_FullMethodName   = "/inventory.v1.InventoryService/GetPart"
-	InventoryService_ListParts_FullMethodName = "/inventory.v1.InventoryService/ListParts"
+	InventoryService_GetPart_FullMethodName      = "/inventory.v1.InventoryService/GetPart"
+	InventoryService_ListParts_FullMethodName    = "/inventory.v1.InventoryService/ListParts"
+	InventoryService_ReserveParts_FullMethodName = "/inventory.v1.InventoryService/ReserveParts"
+	InventoryService_ReleaseParts_FullMethodName = "/inventory.v1.InventoryService/ReleaseParts"
 )
 
 // InventoryServiceClient is the client API for InventoryService service.
@@ -33,6 +35,12 @@ type InventoryServiceClient interface {
 	GetPart(ctx context.Context, in *GetPartRequest, opts ...grpc.CallOption) (*GetPartResponse, error)
 	// ListParts returns a list of parts
 	ListParts(ctx context.Context, in *ListPartsRequest, opts ...grpc.CallOption) (*ListPartsResponse, error)
+	// ReserveParts reserves exactly one unit of every listed part, atomically
+	// as a set (including a cross-part compatibility check).
+	ReserveParts(ctx context.Context, in *ReservePartsRequest, opts ...grpc.CallOption) (*ReservePartsResponse, error)
+	// ReleaseParts releases a previous reservation of one unit of every
+	// listed part.
+	ReleaseParts(ctx context.Context, in *ReleasePartsRequest, opts ...grpc.CallOption) (*ReleasePartsResponse, error)
 }
 
 type inventoryServiceClient struct {
@@ -63,6 +71,26 @@ func (c *inventoryServiceClient) ListParts(ctx context.Context, in *ListPartsReq
 	return out, nil
 }
 
+func (c *inventoryServiceClient) ReserveParts(ctx context.Context, in *ReservePartsRequest, opts ...grpc.CallOption) (*ReservePartsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReservePartsResponse)
+	err := c.cc.Invoke(ctx, InventoryService_ReserveParts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *inventoryServiceClient) ReleaseParts(ctx context.Context, in *ReleasePartsRequest, opts ...grpc.CallOption) (*ReleasePartsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleasePartsResponse)
+	err := c.cc.Invoke(ctx, InventoryService_ReleaseParts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InventoryServiceServer is the server API for InventoryService service.
 // All implementations must embed UnimplementedInventoryServiceServer
 // for forward compatibility.
@@ -73,6 +101,12 @@ type InventoryServiceServer interface {
 	GetPart(context.Context, *GetPartRequest) (*GetPartResponse, error)
 	// ListParts returns a list of parts
 	ListParts(context.Context, *ListPartsRequest) (*ListPartsResponse, error)
+	// ReserveParts reserves exactly one unit of every listed part, atomically
+	// as a set (including a cross-part compatibility check).
+	ReserveParts(context.Context, *ReservePartsRequest) (*ReservePartsResponse, error)
+	// ReleaseParts releases a previous reservation of one unit of every
+	// listed part.
+	ReleaseParts(context.Context, *ReleasePartsRequest) (*ReleasePartsResponse, error)
 	mustEmbedUnimplementedInventoryServiceServer()
 }
 
@@ -88,6 +122,12 @@ func (UnimplementedInventoryServiceServer) GetPart(context.Context, *GetPartRequ
 }
 func (UnimplementedInventoryServiceServer) ListParts(context.Context, *ListPartsRequest) (*ListPartsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListParts not implemented")
+}
+func (UnimplementedInventoryServiceServer) ReserveParts(context.Context, *ReservePartsRequest) (*ReservePartsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReserveParts not implemented")
+}
+func (UnimplementedInventoryServiceServer) ReleaseParts(context.Context, *ReleasePartsRequest) (*ReleasePartsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseParts not implemented")
 }
 func (UnimplementedInventoryServiceServer) mustEmbedUnimplementedInventoryServiceServer() {}
 func (UnimplementedInventoryServiceServer) testEmbeddedByValue()                          {}
@@ -146,6 +186,42 @@ func _InventoryService_ListParts_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InventoryService_ReserveParts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReservePartsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InventoryServiceServer).ReserveParts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InventoryService_ReserveParts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InventoryServiceServer).ReserveParts(ctx, req.(*ReservePartsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InventoryService_ReleaseParts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleasePartsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InventoryServiceServer).ReleaseParts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InventoryService_ReleaseParts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InventoryServiceServer).ReleaseParts(ctx, req.(*ReleasePartsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InventoryService_ServiceDesc is the grpc.ServiceDesc for InventoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -160,6 +236,14 @@ var InventoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListParts",
 			Handler:    _InventoryService_ListParts_Handler,
+		},
+		{
+			MethodName: "ReserveParts",
+			Handler:    _InventoryService_ReserveParts_Handler,
+		},
+		{
+			MethodName: "ReleaseParts",
+			Handler:    _InventoryService_ReleaseParts_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

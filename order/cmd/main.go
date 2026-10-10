@@ -10,96 +10,22 @@ import (
 	"syscall"
 	"time"
 
-	trmpgx "github.com/avito-tech/go-transaction-manager/drivers/pgxv5/v2"
-	"github.com/avito-tech/go-transaction-manager/trm/v2/manager"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/keepalive"
-
-	orderAPI "github.com/omaigo88/order/pkg/api"
-	orderRepository "github.com/omaigo88/order/pkg/repository"
-	orderService "github.com/omaigo88/order/pkg/service"
-	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
-	paymentv1 "github.com/omaigo88/shared/pkg/proto/payment/v1"
+	"github.com/omaigo88/order/internal/app"
 )
-
-const (
-	defaultInventoryServiceAddress = "localhost:50051"
-	defaultPaymentServiceAddress   = "localhost:50052"
-)
-
-// getEnv returns the environment variable named by key, or fallback if unset/empty.
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-
-	return fallback
-}
-
-var grpcKeepaliveParams = grpc.WithKeepaliveParams(keepalive.ClientParameters{
-	Time:                30 * time.Second,
-	Timeout:             10 * time.Second,
-	PermitWithoutStream: true,
-})
 
 func main() {
 	ctx := context.Background()
 
-	pool, err := pgxpool.New(ctx, os.Getenv("DB_URI"))
+	container, err := app.New(ctx)
 	if err != nil {
-		slog.Error("failed to create Postgres pool", "error", err)
+		slog.Error("failed to build container", "error", err)
 		os.Exit(1)
 	}
-	defer pool.Close()
-
-	trManager := manager.Must(trmpgx.NewDefaultFactory(pool))
-
-	// Create a gRPC connection to InventoryService
-	inventoryConn, err := grpc.NewClient(
-		getEnv("INVENTORY_SERVICE_ADDRESS", defaultInventoryServiceAddress),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpcKeepaliveParams,
-	)
-	if err != nil {
-		slog.Error("failed to connect to InventoryService", "error", err)
-		os.Exit(1)
-	}
-	defer func() { _ = inventoryConn.Close() }()
-
-	// Create a gRPC connection to PaymentService
-	paymentConn, err := grpc.NewClient(
-		getEnv("PAYMENT_SERVICE_ADDRESS", defaultPaymentServiceAddress),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpcKeepaliveParams,
-	)
-	if err != nil {
-		slog.Error("failed to connect to PaymentService", "error", err)
-		os.Exit(1)
-	}
-	defer func() { _ = paymentConn.Close() }()
-
-	// Create the repository, service and handler
-	repo := orderRepository.NewPostgresRepository(pool)
-	svc := orderService.NewService(
-		inventoryv1.NewInventoryServiceClient(inventoryConn),
-		paymentv1.NewPaymentServiceClient(paymentConn),
-		repo,
-		trManager,
-	)
-	h := orderAPI.NewHandler(svc)
-
-	// Create the OpenAPI server
-	orderServer, err := orderAPI.SetupServer(h)
-	if err != nil {
-		slog.Error("failed to create OpenAPI server", "error", err)
-		os.Exit(1)
-	}
+	defer container.Close()
 
 	httpServer := &http.Server{
 		Addr:              ":8080",
-		Handler:           orderServer,
+		Handler:           container.Server,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

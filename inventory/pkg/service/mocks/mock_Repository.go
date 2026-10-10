@@ -8,7 +8,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
-	"github.com/omaigo88/inventory/pkg/repository"
+	"github.com/omaigo88/inventory/pkg/domain"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -40,22 +40,22 @@ func (_m *MockRepository) EXPECT() *MockRepository_Expecter {
 }
 
 // GetPart provides a mock function for the type MockRepository
-func (_mock *MockRepository) GetPart(ctx context.Context, id uuid.UUID) (repository.Part, error) {
+func (_mock *MockRepository) GetPart(ctx context.Context, id uuid.UUID) (domain.Part, error) {
 	ret := _mock.Called(ctx, id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetPart")
 	}
 
-	var r0 repository.Part
+	var r0 domain.Part
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, uuid.UUID) (repository.Part, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uuid.UUID) (domain.Part, error)); ok {
 		return returnFunc(ctx, id)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, uuid.UUID) repository.Part); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uuid.UUID) domain.Part); ok {
 		r0 = returnFunc(ctx, id)
 	} else {
-		r0 = ret.Get(0).(repository.Part)
+		r0 = ret.Get(0).(domain.Part)
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, uuid.UUID) error); ok {
 		r1 = returnFunc(ctx, id)
@@ -95,34 +95,34 @@ func (_c *MockRepository_GetPart_Call) Run(run func(ctx context.Context, id uuid
 	return _c
 }
 
-func (_c *MockRepository_GetPart_Call) Return(part repository.Part, err error) *MockRepository_GetPart_Call {
+func (_c *MockRepository_GetPart_Call) Return(part domain.Part, err error) *MockRepository_GetPart_Call {
 	_c.Call.Return(part, err)
 	return _c
 }
 
-func (_c *MockRepository_GetPart_Call) RunAndReturn(run func(ctx context.Context, id uuid.UUID) (repository.Part, error)) *MockRepository_GetPart_Call {
+func (_c *MockRepository_GetPart_Call) RunAndReturn(run func(ctx context.Context, id uuid.UUID) (domain.Part, error)) *MockRepository_GetPart_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListParts provides a mock function for the type MockRepository
-func (_mock *MockRepository) ListParts(ctx context.Context) ([]repository.Part, error) {
+func (_mock *MockRepository) ListParts(ctx context.Context) ([]domain.Part, error) {
 	ret := _mock.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListParts")
 	}
 
-	var r0 []repository.Part
+	var r0 []domain.Part
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]repository.Part, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]domain.Part, error)); ok {
 		return returnFunc(ctx)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context) []repository.Part); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context) []domain.Part); ok {
 		r0 = returnFunc(ctx)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]repository.Part)
+			r0 = ret.Get(0).([]domain.Part)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
@@ -157,12 +157,69 @@ func (_c *MockRepository_ListParts_Call) Run(run func(ctx context.Context)) *Moc
 	return _c
 }
 
-func (_c *MockRepository_ListParts_Call) Return(parts []repository.Part, err error) *MockRepository_ListParts_Call {
+func (_c *MockRepository_ListParts_Call) Return(parts []domain.Part, err error) *MockRepository_ListParts_Call {
 	_c.Call.Return(parts, err)
 	return _c
 }
 
-func (_c *MockRepository_ListParts_Call) RunAndReturn(run func(ctx context.Context) ([]repository.Part, error)) *MockRepository_ListParts_Call {
+func (_c *MockRepository_ListParts_Call) RunAndReturn(run func(ctx context.Context) ([]domain.Part, error)) *MockRepository_ListParts_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// Save provides a mock function for the type MockRepository
+func (_mock *MockRepository) Save(ctx context.Context, part domain.Part) error {
+	ret := _mock.Called(ctx, part)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Save")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.Part) error); ok {
+		r0 = returnFunc(ctx, part)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockRepository_Save_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Save'
+type MockRepository_Save_Call struct {
+	*mock.Call
+}
+
+// Save is a helper method to define mock.On call
+//   - ctx context.Context
+//   - part domain.Part
+func (_e *MockRepository_Expecter) Save(ctx interface{}, part interface{}) *MockRepository_Save_Call {
+	return &MockRepository_Save_Call{Call: _e.mock.On("Save", ctx, part)}
+}
+
+func (_c *MockRepository_Save_Call) Run(run func(ctx context.Context, part domain.Part)) *MockRepository_Save_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 domain.Part
+		if args[1] != nil {
+			arg1 = args[1].(domain.Part)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockRepository_Save_Call) Return(err error) *MockRepository_Save_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockRepository_Save_Call) RunAndReturn(run func(ctx context.Context, part domain.Part) error) *MockRepository_Save_Call {
 	_c.Call.Return(run)
 	return _c
 }

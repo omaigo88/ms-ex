@@ -120,6 +120,11 @@ func (h *Handler) CreateOrder(ctx context.Context, req *orderv1.CreateOrderReque
 				Code:    http.StatusConflict,
 				Message: err.Error(),
 			}, nil
+		case errors.Is(err, orderService.ErrIncompatibleComponents):
+			return &orderv1.CreateOrderConflict{
+				Code:    http.StatusConflict,
+				Message: err.Error(),
+			}, nil
 		default:
 			return nil, err
 		}

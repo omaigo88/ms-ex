@@ -22,6 +22,14 @@ func notFoundGRPCErr() error {
 	return status.Error(codes.NotFound, "part not found")
 }
 
+func outOfStockGRPCErr() error {
+	return status.Error(codes.FailedPrecondition, "insufficient stock: some-part")
+}
+
+func incompatibleGRPCErr() error {
+	return status.Error(codes.FailedPrecondition, "incompatible parts: some message")
+}
+
 func TestService_CreateOrder_Success(t *testing.T) {
 	hullUUID, engineUUID := uuid.New(), uuid.New()
 
@@ -34,6 +42,10 @@ func TestService_CreateOrder_Success(t *testing.T) {
 				{Uuid: engineUUID.String(), Price: 300000, StockQuantity: 1},
 			},
 		}, nil)
+
+	inv.EXPECT().
+		ReserveParts(context.Background(), &inventoryv1.ReservePartsRequest{Uuids: []string{hullUUID.String(), engineUUID.String()}}).
+		Return(&inventoryv1.ReservePartsResponse{}, nil)
 
 	pay := mocks.NewMockPaymentClient(t)
 	repo := mocks.NewMockRepository(t)
@@ -82,6 +94,9 @@ func TestService_CreateOrder_OutOfStock(t *testing.T) {
 				{Uuid: engineUUID.String(), Price: 300000, StockQuantity: 1},
 			},
 		}, nil)
+	inv.EXPECT().
+		ReserveParts(context.Background(), &inventoryv1.ReservePartsRequest{Uuids: []string{hullUUID.String(), engineUUID.String()}}).
+		Return(nil, outOfStockGRPCErr())
 
 	pay := mocks.NewMockPaymentClient(t)
 	repo := mocks.NewMockRepository(t)
@@ -93,6 +108,34 @@ func TestService_CreateOrder_OutOfStock(t *testing.T) {
 		EngineUUID: engineUUID,
 	})
 	require.ErrorIs(t, err, service.ErrComponentOutOfStock)
+}
+
+func TestService_CreateOrder_Incompatible(t *testing.T) {
+	hullUUID, engineUUID := uuid.New(), uuid.New()
+
+	inv := mocks.NewMockInventoryClient(t)
+	inv.EXPECT().
+		ListParts(context.Background(), &inventoryv1.ListPartsRequest{Uuids: []string{hullUUID.String(), engineUUID.String()}}).
+		Return(&inventoryv1.ListPartsResponse{
+			Parts: []*inventoryv1.Part{
+				{Uuid: hullUUID.String(), Price: 500000, StockQuantity: 1},
+				{Uuid: engineUUID.String(), Price: 300000, StockQuantity: 1},
+			},
+		}, nil)
+	inv.EXPECT().
+		ReserveParts(context.Background(), &inventoryv1.ReservePartsRequest{Uuids: []string{hullUUID.String(), engineUUID.String()}}).
+		Return(nil, incompatibleGRPCErr())
+
+	pay := mocks.NewMockPaymentClient(t)
+	repo := mocks.NewMockRepository(t)
+
+	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
+
+	_, err := svc.CreateOrder(context.Background(), service.CreateOrderInput{
+		HullUUID:   hullUUID,
+		EngineUUID: engineUUID,
+	})
+	require.ErrorIs(t, err, service.ErrIncompatibleComponents)
 }
 
 func TestService_GetOrder_Success(t *testing.T) {
@@ -184,9 +227,19 @@ func TestService_PayOrder_AlreadyFinal(t *testing.T) {
 
 func TestService_CancelOrder_Success(t *testing.T) {
 	id := uuid.New()
-	existing := repository.Order{OrderUUID: id, Status: repository.OrderStatusPendingPayment}
+	hullUUID, engineUUID := uuid.New(), uuid.New()
+	existing := repository.Order{
+		OrderUUID:  id,
+		HullUUID:   hullUUID,
+		EngineUUID: engineUUID,
+		Status:     repository.OrderStatusPendingPayment,
+	}
 
 	inv := mocks.NewMockInventoryClient(t)
+	inv.EXPECT().
+		ReleaseParts(context.Background(), &inventoryv1.ReleasePartsRequest{Uuids: []string{hullUUID.String(), engineUUID.String()}}).
+		Return(&inventoryv1.ReleasePartsResponse{}, nil)
+
 	pay := mocks.NewMockPaymentClient(t)
 	repo := mocks.NewMockRepository(t)
 	repo.EXPECT().Get(context.Background(), id).Return(existing, nil)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/omaigo88/inventory/pkg/domain"
 	"github.com/omaigo88/inventory/pkg/repository"
 	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
 )
@@ -24,38 +25,40 @@ var (
 
 // Repository is the persistence dependency required by Service.
 type Repository interface {
-	GetPart(ctx context.Context, id uuid.UUID) (repository.Part, error)
-	ListParts(ctx context.Context) ([]repository.Part, error)
+	GetPart(ctx context.Context, id uuid.UUID) (domain.Part, error)
+	ListParts(ctx context.Context) ([]domain.Part, error)
+	Save(ctx context.Context, part domain.Part) error
 }
 
 // Service implements the InventoryService business logic.
 type Service struct {
-	repo Repository
+	repo    Repository
+	checker *domain.CompatibilityChecker
 }
 
 // NewService creates a new Service backed by the given Repository.
-func NewService(repo Repository) *Service {
-	return &Service{repo: repo}
+func NewService(repo Repository, checker *domain.CompatibilityChecker) *Service {
+	return &Service{repo: repo, checker: checker}
 }
 
 // GetPart returns a part by its raw UUID string.
-func (s *Service) GetPart(ctx context.Context, rawUUID string) (repository.Part, error) {
+func (s *Service) GetPart(ctx context.Context, rawUUID string) (domain.Part, error) {
 	if rawUUID == "" {
-		return repository.Part{}, ErrEmptyUUID
+		return domain.Part{}, ErrEmptyUUID
 	}
 
 	id, err := uuid.Parse(rawUUID)
 	if err != nil {
-		return repository.Part{}, fmt.Errorf("%w: %s", ErrInvalidUUID, rawUUID)
+		return domain.Part{}, fmt.Errorf("%w: %s", ErrInvalidUUID, rawUUID)
 	}
 
 	part, err := s.repo.GetPart(ctx, id)
 	if errors.Is(err, repository.ErrNotFound) {
-		return repository.Part{}, fmt.Errorf("%w: %s", ErrPartNotFound, rawUUID)
+		return domain.Part{}, fmt.Errorf("%w: %s", ErrPartNotFound, rawUUID)
 	}
 
 	if err != nil {
-		return repository.Part{}, err
+		return domain.Part{}, err
 	}
 
 	return part, nil
@@ -67,9 +70,9 @@ func (s *Service) ListParts(
 	ctx context.Context,
 	partType inventoryv1.PartType,
 	rawUUIDs []string,
-) ([]repository.Part, error) {
+) ([]domain.Part, error) {
 	if len(rawUUIDs) > 0 {
-		parts := make([]repository.Part, 0, len(rawUUIDs))
+		parts := make([]domain.Part, 0, len(rawUUIDs))
 
 		for _, rawUUID := range rawUUIDs {
 			id, err := uuid.Parse(rawUUID)
@@ -97,10 +100,11 @@ func (s *Service) ListParts(
 		return nil, err
 	}
 
-	parts := make([]repository.Part, 0, len(all))
+	wantType := domain.PartType(partType)
+	parts := make([]domain.Part, 0, len(all))
 
 	for _, part := range all {
-		if partType != inventoryv1.PartType_PART_TYPE_UNSPECIFIED && part.PartType != partType {
+		if wantType != domain.PartTypeUnspecified && part.Type() != wantType {
 			continue
 		}
 
@@ -108,8 +112,83 @@ func (s *Service) ListParts(
 	}
 
 	sort.Slice(parts, func(i, j int) bool {
-		return parts[i].Name < parts[j].Name
+		return parts[i].Name() < parts[j].Name()
 	})
 
 	return parts, nil
+}
+
+// resolveParts parses and fetches a domain.Part for every raw UUID.
+func (s *Service) resolveParts(ctx context.Context, rawUUIDs []string) ([]domain.Part, error) {
+	parts := make([]domain.Part, 0, len(rawUUIDs))
+
+	for _, rawUUID := range rawUUIDs {
+		id, err := uuid.Parse(rawUUID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s", ErrInvalidUUID, rawUUID)
+		}
+
+		part, err := s.repo.GetPart(ctx, id)
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, fmt.Errorf("%w: %s", ErrPartNotFound, rawUUID)
+		}
+
+		if err != nil {
+			return nil, err
+		}
+
+		parts = append(parts, part)
+	}
+
+	return parts, nil
+}
+
+// ReserveParts reserves exactly one unit of every listed part, atomically as
+// a set: stock and cross-part compatibility are both checked before any
+// reservation is persisted.
+func (s *Service) ReserveParts(ctx context.Context, rawUUIDs []string) error {
+	parts, err := s.resolveParts(ctx, rawUUIDs)
+	if err != nil {
+		return err
+	}
+
+	for i := range parts {
+		if err := parts[i].Reserve(1); err != nil {
+			return err
+		}
+	}
+
+	if err := s.checker.Check(parts); err != nil {
+		return err
+	}
+
+	for i := range parts {
+		if err := s.repo.Save(ctx, parts[i]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ReleaseParts releases a previous reservation of one unit of every listed part.
+func (s *Service) ReleaseParts(ctx context.Context, rawUUIDs []string) error {
+	parts, err := s.resolveParts(ctx, rawUUIDs)
+	if err != nil {
+		return err
+	}
+
+	for i := range parts {
+		if err := parts[i].Release(1); err != nil {
+			return err
+		}
+	}
+
+	for i := range parts {
+		if err := s.repo.Save(ctx, parts[i]); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

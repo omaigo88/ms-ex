@@ -7,16 +7,19 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/omaigo88/inventory/pkg/repository"
+	"github.com/omaigo88/inventory/pkg/domain"
 	inventoryService "github.com/omaigo88/inventory/pkg/service"
 	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
 )
 
 // Service is the business-logic dependency required by Server.
 type Service interface {
-	GetPart(ctx context.Context, rawUUID string) (repository.Part, error)
-	ListParts(ctx context.Context, partType inventoryv1.PartType, rawUUIDs []string) ([]repository.Part, error)
+	GetPart(ctx context.Context, rawUUID string) (domain.Part, error)
+	ListParts(ctx context.Context, partType inventoryv1.PartType, rawUUIDs []string) ([]domain.Part, error)
+	ReserveParts(ctx context.Context, rawUUIDs []string) error
+	ReleaseParts(ctx context.Context, rawUUIDs []string) error
 }
 
 // Server implements inventoryv1.InventoryServiceServer.
@@ -30,16 +33,16 @@ func NewServer(svc Service) *Server {
 	return &Server{svc: svc}
 }
 
-// toProto converts a repository.Part to inventoryv1.Part.
-func toProto(p repository.Part) *inventoryv1.Part {
+// toProto converts a domain.Part to inventoryv1.Part.
+func toProto(p domain.Part) *inventoryv1.Part {
 	return &inventoryv1.Part{
-		Uuid:          p.UUID,
-		Name:          p.Name,
-		Description:   p.Description,
-		Price:         p.Price,
-		PartType:      p.PartType,
-		StockQuantity: p.StockQuantity,
-		CreatedAt:     p.CreatedAt,
+		Uuid:          p.ID().String(),
+		Name:          p.Name(),
+		Description:   p.Description(),
+		Price:         p.Price(),
+		PartType:      inventoryv1.PartType(p.Type()),
+		StockQuantity: p.StockQuantity(),
+		CreatedAt:     timestamppb.New(p.CreatedAt()),
 	}
 }
 
@@ -50,6 +53,10 @@ func toStatusErr(err error) error {
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, inventoryService.ErrPartNotFound):
 		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, domain.ErrInsufficientStock),
+		errors.Is(err, domain.ErrIncompatibleParts),
+		errors.Is(err, domain.ErrReservationUnderflow):
+		return status.Error(codes.FailedPrecondition, err.Error())
 	default:
 		return status.Error(codes.Internal, err.Error())
 	}
@@ -80,4 +87,22 @@ func (s *Server) ListParts(ctx context.Context, req *inventoryv1.ListPartsReques
 	}
 
 	return &inventoryv1.ListPartsResponse{Parts: protoParts}, nil
+}
+
+// ReserveParts reserves one unit of every listed part.
+func (s *Server) ReserveParts(ctx context.Context, req *inventoryv1.ReservePartsRequest) (*inventoryv1.ReservePartsResponse, error) {
+	if err := s.svc.ReserveParts(ctx, req.GetUuids()); err != nil {
+		return nil, toStatusErr(err)
+	}
+
+	return &inventoryv1.ReservePartsResponse{}, nil
+}
+
+// ReleaseParts releases one unit of every listed part.
+func (s *Server) ReleaseParts(ctx context.Context, req *inventoryv1.ReleasePartsRequest) (*inventoryv1.ReleasePartsResponse, error) {
+	if err := s.svc.ReleaseParts(ctx, req.GetUuids()); err != nil {
+		return nil, toStatusErr(err)
+	}
+
+	return &inventoryv1.ReleasePartsResponse{}, nil
 }

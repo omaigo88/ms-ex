@@ -121,3 +121,169 @@ func (_c *MockInventoryClient_ListParts_Call) RunAndReturn(run func(ctx context.
 	_c.Call.Return(run)
 	return _c
 }
+
+// ReleaseParts provides a mock function for the type MockInventoryClient
+func (_mock *MockInventoryClient) ReleaseParts(ctx context.Context, in *inventoryv1.ReleasePartsRequest, opts ...grpc.CallOption) (*inventoryv1.ReleasePartsResponse, error) {
+	var tmpRet mock.Arguments
+	if len(opts) > 0 {
+		tmpRet = _mock.Called(ctx, in, opts)
+	} else {
+		tmpRet = _mock.Called(ctx, in)
+	}
+	ret := tmpRet
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReleaseParts")
+	}
+
+	var r0 *inventoryv1.ReleasePartsResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *inventoryv1.ReleasePartsRequest, ...grpc.CallOption) (*inventoryv1.ReleasePartsResponse, error)); ok {
+		return returnFunc(ctx, in, opts...)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *inventoryv1.ReleasePartsRequest, ...grpc.CallOption) *inventoryv1.ReleasePartsResponse); ok {
+		r0 = returnFunc(ctx, in, opts...)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*inventoryv1.ReleasePartsResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, *inventoryv1.ReleasePartsRequest, ...grpc.CallOption) error); ok {
+		r1 = returnFunc(ctx, in, opts...)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockInventoryClient_ReleaseParts_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReleaseParts'
+type MockInventoryClient_ReleaseParts_Call struct {
+	*mock.Call
+}
+
+// ReleaseParts is a helper method to define mock.On call
+//   - ctx context.Context
+//   - in *inventoryv1.ReleasePartsRequest
+//   - opts ...grpc.CallOption
+func (_e *MockInventoryClient_Expecter) ReleaseParts(ctx interface{}, in interface{}, opts ...interface{}) *MockInventoryClient_ReleaseParts_Call {
+	return &MockInventoryClient_ReleaseParts_Call{Call: _e.mock.On("ReleaseParts",
+		append([]interface{}{ctx, in}, opts...)...)}
+}
+
+func (_c *MockInventoryClient_ReleaseParts_Call) Run(run func(ctx context.Context, in *inventoryv1.ReleasePartsRequest, opts ...grpc.CallOption)) *MockInventoryClient_ReleaseParts_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 *inventoryv1.ReleasePartsRequest
+		if args[1] != nil {
+			arg1 = args[1].(*inventoryv1.ReleasePartsRequest)
+		}
+		var arg2 []grpc.CallOption
+		var variadicArgs []grpc.CallOption
+		if len(args) > 2 {
+			variadicArgs = args[2].([]grpc.CallOption)
+		}
+		arg2 = variadicArgs
+		run(
+			arg0,
+			arg1,
+			arg2...,
+		)
+	})
+	return _c
+}
+
+func (_c *MockInventoryClient_ReleaseParts_Call) Return(releasePartsResponse *inventoryv1.ReleasePartsResponse, err error) *MockInventoryClient_ReleaseParts_Call {
+	_c.Call.Return(releasePartsResponse, err)
+	return _c
+}
+
+func (_c *MockInventoryClient_ReleaseParts_Call) RunAndReturn(run func(ctx context.Context, in *inventoryv1.ReleasePartsRequest, opts ...grpc.CallOption) (*inventoryv1.ReleasePartsResponse, error)) *MockInventoryClient_ReleaseParts_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ReserveParts provides a mock function for the type MockInventoryClient
+func (_mock *MockInventoryClient) ReserveParts(ctx context.Context, in *inventoryv1.ReservePartsRequest, opts ...grpc.CallOption) (*inventoryv1.ReservePartsResponse, error) {
+	var tmpRet mock.Arguments
+	if len(opts) > 0 {
+		tmpRet = _mock.Called(ctx, in, opts)
+	} else {
+		tmpRet = _mock.Called(ctx, in)
+	}
+	ret := tmpRet
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReserveParts")
+	}
+
+	var r0 *inventoryv1.ReservePartsResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *inventoryv1.ReservePartsRequest, ...grpc.CallOption) (*inventoryv1.ReservePartsResponse, error)); ok {
+		return returnFunc(ctx, in, opts...)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *inventoryv1.ReservePartsRequest, ...grpc.CallOption) *inventoryv1.ReservePartsResponse); ok {
+		r0 = returnFunc(ctx, in, opts...)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*inventoryv1.ReservePartsResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, *inventoryv1.ReservePartsRequest, ...grpc.CallOption) error); ok {
+		r1 = returnFunc(ctx, in, opts...)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockInventoryClient_ReserveParts_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReserveParts'
+type MockInventoryClient_ReserveParts_Call struct {
+	*mock.Call
+}
+
+// ReserveParts is a helper method to define mock.On call
+//   - ctx context.Context
+//   - in *inventoryv1.ReservePartsRequest
+//   - opts ...grpc.CallOption
+func (_e *MockInventoryClient_Expecter) ReserveParts(ctx interface{}, in interface{}, opts ...interface{}) *MockInventoryClient_ReserveParts_Call {
+	return &MockInventoryClient_ReserveParts_Call{Call: _e.mock.On("ReserveParts",
+		append([]interface{}{ctx, in}, opts...)...)}
+}
+
+func (_c *MockInventoryClient_ReserveParts_Call) Run(run func(ctx context.Context, in *inventoryv1.ReservePartsRequest, opts ...grpc.CallOption)) *MockInventoryClient_ReserveParts_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 *inventoryv1.ReservePartsRequest
+		if args[1] != nil {
+			arg1 = args[1].(*inventoryv1.ReservePartsRequest)
+		}
+		var arg2 []grpc.CallOption
+		var variadicArgs []grpc.CallOption
+		if len(args) > 2 {
+			variadicArgs = args[2].([]grpc.CallOption)
+		}
+		arg2 = variadicArgs
+		run(
+			arg0,
+			arg1,
+			arg2...,
+		)
+	})
+	return _c
+}
+
+func (_c *MockInventoryClient_ReserveParts_Call) Return(reservePartsResponse *inventoryv1.ReservePartsResponse, err error) *MockInventoryClient_ReserveParts_Call {
+	_c.Call.Return(reservePartsResponse, err)
+	return _c
+}
+
+func (_c *MockInventoryClient_ReserveParts_Call) RunAndReturn(run func(ctx context.Context, in *inventoryv1.ReservePartsRequest, opts ...grpc.CallOption) (*inventoryv1.ReservePartsResponse, error)) *MockInventoryClient_ReserveParts_Call {
+	_c.Call.Return(run)
+	return _c
+}

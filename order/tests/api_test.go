@@ -33,6 +33,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	inventoryAPI "github.com/omaigo88/inventory/pkg/api"
+	inventoryDomain "github.com/omaigo88/inventory/pkg/domain"
 	inventoryRepository "github.com/omaigo88/inventory/pkg/repository"
 	inventoryService "github.com/omaigo88/inventory/pkg/service"
 	orderAPI "github.com/omaigo88/order/pkg/api"
@@ -101,7 +102,7 @@ func TestMain(m *testing.M) {
 	invLis = bufconn.Listen(bufSize)
 	invGRPCServer := grpc.NewServer()
 	invRepo := inventoryRepository.NewMemoryRepository()
-	invSvc := inventoryService.NewService(invRepo)
+	invSvc := inventoryService.NewService(invRepo, inventoryDomain.NewCompatibilityChecker())
 	inventoryv1.RegisterInventoryServiceServer(invGRPCServer, inventoryAPI.NewServer(invSvc))
 	go func() {
 		if invServeErr := invGRPCServer.Serve(invLis); invServeErr != nil {
@@ -1165,6 +1166,23 @@ func TestOrder_Create_OutOfStock(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 
 	require.Equal(t, http.StatusConflict, resp.StatusCode)
+}
+
+// Incompatible components test (CompatibilityChecker)
+
+func TestOrder_Create_IncompatibleParts(t *testing.T) {
+	// Titanium Hull (mass 3000kg) exceeds Ion Engine C's rating (max 1500kg) —
+	// see inventory/pkg/domain's CompatibilityChecker.
+	req := &CreateOrderRequest{
+		HullUUID:   HullTitaniumUUID,
+		EngineUUID: EngineIonCUUID,
+	}
+
+	result, resp := createOrder(t, req)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	require.Nil(t, result)
 }
 
 // ogen validation tests (400 Bad Request)

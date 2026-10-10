@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,11 +27,15 @@ var (
 	ErrComponentNotFound = errors.New("component not found")
 	// ErrComponentOutOfStock is returned when a requested component has no stock.
 	ErrComponentOutOfStock = errors.New("component out of stock")
+	// ErrIncompatibleComponents is returned when the requested components can't be assembled together.
+	ErrIncompatibleComponents = errors.New("components are incompatible")
 )
 
 // InventoryClient is the subset of inventoryv1.InventoryServiceClient used by Service.
 type InventoryClient interface {
 	ListParts(ctx context.Context, in *inventoryv1.ListPartsRequest, opts ...grpc.CallOption) (*inventoryv1.ListPartsResponse, error)
+	ReserveParts(ctx context.Context, in *inventoryv1.ReservePartsRequest, opts ...grpc.CallOption) (*inventoryv1.ReservePartsResponse, error)
+	ReleaseParts(ctx context.Context, in *inventoryv1.ReleasePartsRequest, opts ...grpc.CallOption) (*inventoryv1.ReleasePartsResponse, error)
 }
 
 // PaymentClient is the subset of paymentv1.PaymentServiceClient used by Service.
@@ -70,6 +75,28 @@ func NewService(inventoryClient InventoryClient, paymentClient PaymentClient, re
 	}
 }
 
+// mapInventoryErr translates a gRPC error from Inventory into an order
+// domain sentinel error.
+func mapInventoryErr(err error) error {
+	st, ok := status.FromError(err)
+	if !ok {
+		return err
+	}
+
+	switch st.Code() {
+	case codes.NotFound:
+		return fmt.Errorf("%w: %s", ErrComponentNotFound, st.Message())
+	case codes.FailedPrecondition:
+		if strings.Contains(st.Message(), "incompatible") {
+			return fmt.Errorf("%w: %s", ErrIncompatibleComponents, st.Message())
+		}
+
+		return fmt.Errorf("%w: %s", ErrComponentOutOfStock, st.Message())
+	default:
+		return err
+	}
+}
+
 // paymentMethodToProto converts a repository.PaymentMethod to paymentv1.PaymentMethod.
 func paymentMethodToProto(pm repository.PaymentMethod) paymentv1.PaymentMethod {
 	switch pm {
@@ -101,21 +128,18 @@ func (s *Service) CreateOrder(ctx context.Context, input CreateOrderInput) (repo
 
 	resp, err := s.inventoryClient.ListParts(ctx, &inventoryv1.ListPartsRequest{Uuids: uuids})
 	if err != nil {
-		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
-			return repository.Order{}, fmt.Errorf("%w: %s", ErrComponentNotFound, st.Message())
-		}
-
-		return repository.Order{}, err
+		return repository.Order{}, mapInventoryErr(err)
 	}
 
 	var totalPrice int64
-
 	for _, part := range resp.GetParts() {
-		if part.GetStockQuantity() <= 0 {
-			return repository.Order{}, fmt.Errorf("%w: %s", ErrComponentOutOfStock, part.GetUuid())
-		}
-
 		totalPrice += part.GetPrice()
+	}
+
+	// Reserve atomically as a set: stock and cross-part compatibility are
+	// both enforced by Inventory before anything is committed there.
+	if _, err := s.inventoryClient.ReserveParts(ctx, &inventoryv1.ReservePartsRequest{Uuids: uuids}); err != nil {
+		return repository.Order{}, mapInventoryErr(err)
 	}
 
 	order := repository.Order{
@@ -206,6 +230,19 @@ func (s *Service) CancelOrder(ctx context.Context, id uuid.UUID) (repository.Ord
 
 	if order.Status != repository.OrderStatusPendingPayment {
 		return repository.Order{}, fmt.Errorf("%w: %s", ErrOrderAlreadyFinal, id)
+	}
+
+	uuids := []string{order.HullUUID.String(), order.EngineUUID.String()}
+	if order.ShieldUUID != nil {
+		uuids = append(uuids, order.ShieldUUID.String())
+	}
+
+	if order.WeaponUUID != nil {
+		uuids = append(uuids, order.WeaponUUID.String())
+	}
+
+	if _, err := s.inventoryClient.ReleaseParts(ctx, &inventoryv1.ReleasePartsRequest{Uuids: uuids}); err != nil {
+		return repository.Order{}, mapInventoryErr(err)
 	}
 
 	order.Status = repository.OrderStatusCancelled

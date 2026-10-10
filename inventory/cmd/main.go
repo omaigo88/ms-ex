@@ -9,14 +9,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 
-	inventoryAPI "github.com/omaigo88/inventory/pkg/api"
-	inventoryRepository "github.com/omaigo88/inventory/pkg/repository"
-	inventoryService "github.com/omaigo88/inventory/pkg/service"
+	"github.com/omaigo88/inventory/internal/app"
 	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
 )
 
@@ -25,12 +22,12 @@ const grpcAddress = ":50051"
 func main() {
 	ctx := context.Background()
 
-	pool, err := pgxpool.New(ctx, os.Getenv("DB_URI"))
+	container, err := app.New(ctx)
 	if err != nil {
-		slog.Error("failed to create Postgres pool", "error", err)
+		slog.Error("failed to build container", "error", err)
 		os.Exit(1)
 	}
-	defer pool.Close()
+	defer container.Close()
 
 	lis, err := net.Listen("tcp", grpcAddress)
 	if err != nil {
@@ -49,9 +46,7 @@ func main() {
 			PermitWithoutStream: true,
 		}),
 	)
-	repo := inventoryRepository.NewPostgresRepository(pool)
-	svc := inventoryService.NewService(repo)
-	inventoryv1.RegisterInventoryServiceServer(grpcServer, inventoryAPI.NewServer(svc))
+	inventoryv1.RegisterInventoryServiceServer(grpcServer, container.Server)
 
 	// Enable reflection for postman/grpcurl
 	reflection.Register(grpcServer)
