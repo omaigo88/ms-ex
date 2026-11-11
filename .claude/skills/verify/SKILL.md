@@ -18,7 +18,7 @@ that step. Never report a step as passed without having run it in this session.
    ```
 3. `task format` — then check `git diff` didn't change files you didn't touch.
 4. `task build`
-5. `task lint` — must end with `0 issues.`
+5. `task lint` — must end with `0 issues.`; `task proto:lint` — no output.
 6. `task test` — every package `ok`, no `DATA RACE`.
 7. `task test:api`
 8. `task test:coverage` — must meet the 40% threshold.

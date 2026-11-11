@@ -66,6 +66,10 @@ Kafka UI: http://localhost:8090. Host Kafka listener: `localhost:9094`.
 
 Report results faithfully — if a step was skipped or failed, say so.
 
+CI (`.github/workflows/ci.yml`) enforces steps 1–3 and 5 plus `task build`,
+`task proto:lint` and `task test:coverage` on every PR. It does **not** run
+e2e — step 4 is on you before opening the PR.
+
 ## Hard rules
 
 - **Never hand-edit generated code**: `shared/pkg/proto/**`, `shared/pkg/openapi/**`,
@@ -73,6 +77,9 @@ Report results faithfully — if a step was skipped or failed, say so.
 - **Never edit an applied migration** — add a new one.
 - Everything in the repo (code, comments, docs, commit messages) is in **English**.
 - Commit/push only when explicitly asked. Never force-push without being asked.
+- **`main` is protected** (ruleset `.github/rulesets/main.json`): no direct
+  pushes. Work on a branch (`feat/…`, `fix/…`, `chore/…`, `docs/…`), push it, and
+  open a PR; it merges only after the `CI passed` check is green and one approval.
 - Keep the e2e script working: every behavior change that's visible via the API gets a scenario.
 - Keep `docs/architecture.md` true: never finish an architectural change without updating it.
 

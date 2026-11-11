@@ -26,11 +26,16 @@ const (
 type PartType int32
 
 const (
+	// Type not set
 	PartType_PART_TYPE_UNSPECIFIED PartType = 0
-	PartType_PART_TYPE_HULL        PartType = 1
-	PartType_PART_TYPE_ENGINE      PartType = 2
-	PartType_PART_TYPE_SHIELD      PartType = 3
-	PartType_PART_TYPE_WEAPON      PartType = 4
+	// Ship hull
+	PartType_PART_TYPE_HULL PartType = 1
+	// Engine
+	PartType_PART_TYPE_ENGINE PartType = 2
+	// Shield
+	PartType_PART_TYPE_SHIELD PartType = 3
+	// Weapon
+	PartType_PART_TYPE_WEAPON PartType = 4
 )
 
 // Enum value maps for PartType.
@@ -88,9 +93,12 @@ type Part struct {
 	// Part description
 	Description string `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
 	// Price in kopecks (5000₽ = 500000)
-	Price         int64                  `protobuf:"varint,4,opt,name=price,proto3" json:"price,omitempty"`
-	PartType      PartType               `protobuf:"varint,5,opt,name=part_type,json=partType,proto3,enum=inventory.v1.PartType" json:"part_type,omitempty"`
-	StockQuantity int64                  `protobuf:"varint,6,opt,name=stock_quantity,json=stockQuantity,proto3" json:"stock_quantity,omitempty"`
+	Price int64 `protobuf:"varint,4,opt,name=price,proto3" json:"price,omitempty"`
+	// Part type
+	PartType PartType `protobuf:"varint,5,opt,name=part_type,json=partType,proto3,enum=inventory.v1.PartType" json:"part_type,omitempty"`
+	// Units in the warehouse (including reserved ones)
+	StockQuantity int64 `protobuf:"varint,6,opt,name=stock_quantity,json=stockQuantity,proto3" json:"stock_quantity,omitempty"`
+	// When the part was added to the catalog
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -177,8 +185,9 @@ func (x *Part) GetCreatedAt() *timestamppb.Timestamp {
 
 // Request to get a part by UUID
 type GetPartRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Uuid          string                 `protobuf:"bytes,1,opt,name=uuid,proto3" json:"uuid,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Part UUID
+	Uuid          string `protobuf:"bytes,1,opt,name=uuid,proto3" json:"uuid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -222,8 +231,9 @@ func (x *GetPartRequest) GetUuid() string {
 
 // Response for a get part request
 type GetPartResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Part          *Part                  `protobuf:"bytes,1,opt,name=part,proto3" json:"part,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The requested part
+	Part          *Part `protobuf:"bytes,1,opt,name=part,proto3" json:"part,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -267,9 +277,11 @@ func (x *GetPartResponse) GetPart() *Part {
 
 // Request for a list of parts
 type ListPartsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PartType      PartType               `protobuf:"varint,1,opt,name=part_type,json=partType,proto3,enum=inventory.v1.PartType" json:"part_type,omitempty"`
-	Uuids         []string               `protobuf:"bytes,2,rep,name=uuids,proto3" json:"uuids,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Filter by part type (unset = any type)
+	PartType PartType `protobuf:"varint,1,opt,name=part_type,json=partType,proto3,enum=inventory.v1.PartType" json:"part_type,omitempty"`
+	// Filter by part UUIDs (empty = all parts)
+	Uuids         []string `protobuf:"bytes,2,rep,name=uuids,proto3" json:"uuids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -320,8 +332,9 @@ func (x *ListPartsRequest) GetUuids() []string {
 
 // Response for a list parts request
 type ListPartsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Parts         []*Part                `protobuf:"bytes,1,rep,name=parts,proto3" json:"parts,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Matching parts
+	Parts         []*Part `protobuf:"bytes,1,rep,name=parts,proto3" json:"parts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -365,8 +378,9 @@ func (x *ListPartsResponse) GetParts() []*Part {
 
 // Request to reserve one unit of each listed part
 type ReservePartsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Uuids         []string               `protobuf:"bytes,1,rep,name=uuids,proto3" json:"uuids,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// UUIDs of the parts to reserve
+	Uuids         []string `protobuf:"bytes,1,rep,name=uuids,proto3" json:"uuids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -447,8 +461,9 @@ func (*ReservePartsResponse) Descriptor() ([]byte, []int) {
 
 // Request to release one unit of each listed part
 type ReleasePartsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Uuids         []string               `protobuf:"bytes,1,rep,name=uuids,proto3" json:"uuids,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// UUIDs of the parts to release
+	Uuids         []string `protobuf:"bytes,1,rep,name=uuids,proto3" json:"uuids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -529,8 +544,9 @@ func (*ReleasePartsResponse) Descriptor() ([]byte, []int) {
 
 // Request to commit (write off) one reserved unit of each listed part
 type CommitPartsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Uuids         []string               `protobuf:"bytes,1,rep,name=uuids,proto3" json:"uuids,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// UUIDs of the reserved parts to commit
+	Uuids         []string `protobuf:"bytes,1,rep,name=uuids,proto3" json:"uuids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
