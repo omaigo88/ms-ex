@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": ["Bash(task build)", "Bash(task format)", "Bash(task lint)", "Bash(task test)",
+              "Bash(task test:api)", "Bash(task test:coverage)", "Bash(task gen)",
+              "Bash(task proto:gen)", "Bash(task proto:lint)", "Bash(task ogen:gen)",
+              "Bash(task mocks:gen)", "Bash(go build *)", "Bash(go test *)", "Bash(go mod tidy *)",
+              "Bash(git status *)", "Bash(git diff *)", "Bash(git log *)", "Bash(docker ps *)"],
+    "deny": ["Edit(shared/pkg/proto/**)", "Edit(shared/pkg/openapi/**)", "Edit(**/mocks/**)",
+             "Write(shared/pkg/proto/**)", "Write(shared/pkg/openapi/**)", "Write(**/mocks/**)"]
+  }
+}
