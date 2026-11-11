@@ -29,10 +29,15 @@ service InventoryService {
 
 // Part type
 enum PartType {
+  // Type not set
   PART_TYPE_UNSPECIFIED = 0;
+  // Ship hull
   PART_TYPE_HULL = 1;
+  // Engine
   PART_TYPE_ENGINE = 2;
+  // Shield
   PART_TYPE_SHIELD = 3;
+  // Weapon
   PART_TYPE_WEAPON = 4;
 }
 
@@ -50,36 +55,45 @@ message Part {
   // Price in kopecks (5000₽ = 500000)
   int64 price = 4;
 
+  // Part type
   PartType part_type = 5;
 
+  // Units in the warehouse (including reserved ones)
   int64 stock_quantity = 6;
 
+  // When the part was added to the catalog
   google.protobuf.Timestamp created_at = 7;
 }
 
 // Request to get a part by UUID
 message GetPartRequest {
+  // Part UUID
   string uuid = 1;
 }
 
 // Response for a get part request
 message GetPartResponse {
+  // The requested part
   Part part = 1;
 }
 
 // Request for a list of parts
 message ListPartsRequest {
+  // Filter by part type (unset = any type)
   PartType part_type = 1;
+  // Filter by part UUIDs (empty = all parts)
   repeated string uuids = 2;
 }
 
 // Response for a list parts request
 message ListPartsResponse {
+  // Matching parts
   repeated Part parts = 1;
 }
 
 // Request to reserve one unit of each listed part
 message ReservePartsRequest {
+  // UUIDs of the parts to reserve
   repeated string uuids = 1;
 }
 
@@ -88,6 +102,7 @@ message ReservePartsResponse {}
 
 // Request to release one unit of each listed part
 message ReleasePartsRequest {
+  // UUIDs of the parts to release
   repeated string uuids = 1;
 }
 
@@ -96,6 +111,7 @@ message ReleasePartsResponse {}
 
 // Request to commit (write off) one reserved unit of each listed part
 message CommitPartsRequest {
+  // UUIDs of the reserved parts to commit
   repeated string uuids = 1;
 }
 

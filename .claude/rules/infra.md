@@ -6,6 +6,7 @@ paths:
   - "go.work"
   - "**/go.mod"
   - "scripts/**"
+  - ".github/**"
 ---
 
 # Infrastructure and tooling
@@ -26,5 +27,12 @@ paths:
 - After dependency changes run `go mod tidy` in each touched module
   (`GOWORK=off go mod tidy -diff` must be empty); gopls reports untidy modules
   even when the workspace builds.
+- CI (`.github/workflows/ci.yml`) calls the same `task` targets as local runs —
+  add new checks as tasks first, then call them from CI; never duplicate
+  commands inline. Jobs: `lint` (build, golangci-lint, proto lint, format
+  diff), `generated` (gen + mocks diff, `go mod tidy -diff`), `unit-tests`
+  (`test:coverage`), `api-tests`. The `CI passed` job aggregates them and is
+  the only required check in the ruleset — add a new job to its `needs`, don't
+  rename it. A new module also goes into the tidy loop there.
 - Ports: Order 8080, Inventory 50051, Payment 50052, order-postgres 5432,
   inventory-postgres 5433, Kafka 9094 (host) / 9092 (in-network), Kafka UI 8090.

@@ -13,10 +13,15 @@ service PaymentService {
 
 // Payment method
 enum PaymentMethod {
+  // Method not set
   PAYMENT_METHOD_UNSPECIFIED = 0;
+  // Bank card
   PAYMENT_METHOD_CARD = 1;
+  // Faster Payments System
   PAYMENT_METHOD_SBP = 2;
+  // Credit card
   PAYMENT_METHOD_CREDIT_CARD = 3;
+  // Investor money
   PAYMENT_METHOD_INVESTOR_MONEY = 4;
 }
 
@@ -25,6 +30,7 @@ message PayOrderRequest {
   // Order UUID
   string order_uuid = 1;
 
+  // How the order is paid
   PaymentMethod payment_method = 2;
 }
 

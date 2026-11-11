@@ -25,10 +25,15 @@ const (
 type PaymentMethod int32
 
 const (
-	PaymentMethod_PAYMENT_METHOD_UNSPECIFIED    PaymentMethod = 0
-	PaymentMethod_PAYMENT_METHOD_CARD           PaymentMethod = 1
-	PaymentMethod_PAYMENT_METHOD_SBP            PaymentMethod = 2
-	PaymentMethod_PAYMENT_METHOD_CREDIT_CARD    PaymentMethod = 3
+	// Method not set
+	PaymentMethod_PAYMENT_METHOD_UNSPECIFIED PaymentMethod = 0
+	// Bank card
+	PaymentMethod_PAYMENT_METHOD_CARD PaymentMethod = 1
+	// Faster Payments System
+	PaymentMethod_PAYMENT_METHOD_SBP PaymentMethod = 2
+	// Credit card
+	PaymentMethod_PAYMENT_METHOD_CREDIT_CARD PaymentMethod = 3
+	// Investor money
 	PaymentMethod_PAYMENT_METHOD_INVESTOR_MONEY PaymentMethod = 4
 )
 
@@ -81,7 +86,8 @@ func (PaymentMethod) EnumDescriptor() ([]byte, []int) {
 type PayOrderRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Order UUID
-	OrderUuid     string        `protobuf:"bytes,1,opt,name=order_uuid,json=orderUuid,proto3" json:"order_uuid,omitempty"`
+	OrderUuid string `protobuf:"bytes,1,opt,name=order_uuid,json=orderUuid,proto3" json:"order_uuid,omitempty"`
+	// How the order is paid
 	PaymentMethod PaymentMethod `protobuf:"varint,2,opt,name=payment_method,json=paymentMethod,proto3,enum=payment.v1.PaymentMethod" json:"payment_method,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -11,7 +11,7 @@ paths:
 ## Protobuf (`shared/proto`, buf v2)
 
 - Generated into `shared/pkg/proto/<pkg>/v1` by `task proto:gen` (also runs `buf format`).
-  `task proto:lint` must pass: STANDARD + `COMMENT_*` rules — **every service,
+  `task proto:lint` must pass (CI enforces it): STANDARD + `COMMENT_*` rules — **every service,
   rpc, message, field, enum and enum value needs a comment**.
 - Packages are versioned (`inventory.v1`, `payment.v1`, `events.v1`);
   `go_package = "github.com/omaigo88/shared/pkg/proto/<pkg>/v1;<pkg>v1"`.
