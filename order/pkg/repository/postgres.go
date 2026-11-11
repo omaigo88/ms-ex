@@ -11,6 +11,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+const selectOrderColumns = `
+	SELECT order_uuid, user_uuid, hull_uuid, engine_uuid, shield_uuid, weapon_uuid,
+	       total_price, transaction_uuid, payment_method, status, created_at
+	FROM orders
+	WHERE order_uuid = $1`
+
 // postgresRepository is a PostgreSQL-backed Repository implementation.
 type postgresRepository struct {
 	pool   *pgxpool.Pool
@@ -34,10 +40,11 @@ func (r *postgresRepository) Save(ctx context.Context, order Order) error {
 	_, err := conn.Exec(
 		ctx, `
 		INSERT INTO orders (
-			order_uuid, hull_uuid, engine_uuid, shield_uuid, weapon_uuid,
+			order_uuid, user_uuid, hull_uuid, engine_uuid, shield_uuid, weapon_uuid,
 			total_price, transaction_uuid, payment_method, status, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (order_uuid) DO UPDATE SET
+			user_uuid        = EXCLUDED.user_uuid,
 			hull_uuid        = EXCLUDED.hull_uuid,
 			engine_uuid      = EXCLUDED.engine_uuid,
 			shield_uuid      = EXCLUDED.shield_uuid,
@@ -47,7 +54,7 @@ func (r *postgresRepository) Save(ctx context.Context, order Order) error {
 			payment_method   = EXCLUDED.payment_method,
 			status           = EXCLUDED.status
 	`,
-		order.OrderUUID, order.HullUUID, order.EngineUUID, order.ShieldUUID, order.WeaponUUID,
+		order.OrderUUID, order.UserUUID, order.HullUUID, order.EngineUUID, order.ShieldUUID, order.WeaponUUID,
 		order.TotalPrice, order.TransactionUUID, order.PaymentMethod, order.Status, order.CreatedAt,
 	)
 	if err != nil {
@@ -57,19 +64,13 @@ func (r *postgresRepository) Save(ctx context.Context, order Order) error {
 	return nil
 }
 
-// Get returns an order by UUID.
-func (r *postgresRepository) Get(ctx context.Context, id uuid.UUID) (Order, error) {
+func (r *postgresRepository) get(ctx context.Context, query string, id uuid.UUID) (Order, error) {
 	conn := r.getter.DefaultTrOrDB(ctx, r.pool)
 
 	var order Order
 
-	err := conn.QueryRow(ctx, `
-		SELECT order_uuid, hull_uuid, engine_uuid, shield_uuid, weapon_uuid,
-		       total_price, transaction_uuid, payment_method, status, created_at
-		FROM orders
-		WHERE order_uuid = $1
-	`, id).Scan(
-		&order.OrderUUID, &order.HullUUID, &order.EngineUUID, &order.ShieldUUID, &order.WeaponUUID,
+	err := conn.QueryRow(ctx, query, id).Scan(
+		&order.OrderUUID, &order.UserUUID, &order.HullUUID, &order.EngineUUID, &order.ShieldUUID, &order.WeaponUUID,
 		&order.TotalPrice, &order.TransactionUUID, &order.PaymentMethod, &order.Status, &order.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -81,4 +82,15 @@ func (r *postgresRepository) Get(ctx context.Context, id uuid.UUID) (Order, erro
 	}
 
 	return order, nil
+}
+
+// Get returns an order by UUID.
+func (r *postgresRepository) Get(ctx context.Context, id uuid.UUID) (Order, error) {
+	return r.get(ctx, selectOrderColumns, id)
+}
+
+// GetForUpdate returns an order by UUID and locks its row until the
+// surrounding transaction ends.
+func (r *postgresRepository) GetForUpdate(ctx context.Context, id uuid.UUID) (Order, error) {
+	return r.get(ctx, selectOrderColumns+` FOR UPDATE`, id)
 }

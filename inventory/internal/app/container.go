@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 
+	trmpgx "github.com/avito-tech/go-transaction-manager/drivers/pgxv5/v2"
+	"github.com/avito-tech/go-transaction-manager/trm/v2/manager"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/omaigo88/inventory/pkg/api"
@@ -34,7 +36,8 @@ func New(ctx context.Context) (*Container, error) {
 
 	repo := repository.NewPostgresRepository(pool)
 	checker := domain.NewCompatibilityChecker()
-	svc := service.NewService(repo, checker)
+	trManager := manager.Must(trmpgx.NewDefaultFactory(pool))
+	svc := service.NewService(repo, checker, trManager)
 	server := api.NewServer(svc)
 
 	return &Container{

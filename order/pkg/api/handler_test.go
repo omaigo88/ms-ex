@@ -56,9 +56,10 @@ func TestHandler_GetOrder_NotFound(t *testing.T) {
 }
 
 func TestHandler_CreateOrder_Success(t *testing.T) {
-	hullUUID, engineUUID := uuid.New(), uuid.New()
+	userUUID, hullUUID, engineUUID := uuid.New(), uuid.New(), uuid.New()
 	order := repository.Order{
 		OrderUUID:  uuid.New(),
+		UserUUID:   userUUID,
 		HullUUID:   hullUUID,
 		EngineUUID: engineUUID,
 		TotalPrice: 800000,
@@ -67,12 +68,12 @@ func TestHandler_CreateOrder_Success(t *testing.T) {
 
 	svc := mocks.NewMockService(t)
 	svc.EXPECT().
-		CreateOrder(context.Background(), service.CreateOrderInput{HullUUID: hullUUID, EngineUUID: engineUUID}).
+		CreateOrder(context.Background(), service.CreateOrderInput{UserUUID: userUUID, HullUUID: hullUUID, EngineUUID: engineUUID}).
 		Return(order, nil)
 
 	h := api.NewHandler(svc)
 
-	req := &orderv1.CreateOrderRequest{HullUUID: hullUUID, EngineUUID: engineUUID}
+	req := &orderv1.CreateOrderRequest{UserUUID: userUUID, HullUUID: hullUUID, EngineUUID: engineUUID}
 
 	res, err := h.CreateOrder(context.Background(), req)
 	require.NoError(t, err)
@@ -160,20 +161,27 @@ func TestHandler_PayOrder_NotFound(t *testing.T) {
 	assert.True(t, ok)
 }
 
-func TestHandler_PayOrder_AlreadyFinal(t *testing.T) {
-	id := uuid.New()
+var statusConflicts = []error{service.ErrOrderAlreadyPaid, service.ErrOrderCancelled, service.ErrOrderAssembled}
 
-	svc := mocks.NewMockService(t)
-	svc.EXPECT().PayOrder(context.Background(), id, repository.PaymentMethodCard).Return(repository.Order{}, service.ErrOrderAlreadyFinal)
+func TestHandler_PayOrder_StatusConflict(t *testing.T) {
+	for _, svcErr := range statusConflicts {
+		t.Run(svcErr.Error(), func(t *testing.T) {
+			id := uuid.New()
 
-	h := api.NewHandler(svc)
+			svc := mocks.NewMockService(t)
+			svc.EXPECT().PayOrder(context.Background(), id, repository.PaymentMethodCard).Return(repository.Order{}, svcErr)
 
-	req := &orderv1.PayOrderRequest{PaymentMethod: orderv1.PaymentMethodCARD}
-	res, err := h.PayOrder(context.Background(), req, orderv1.PayOrderParams{OrderUUID: id})
-	require.NoError(t, err)
+			h := api.NewHandler(svc)
 
-	_, ok := res.(*orderv1.PayOrderConflict)
-	assert.True(t, ok)
+			req := &orderv1.PayOrderRequest{PaymentMethod: orderv1.PaymentMethodCARD}
+			res, err := h.PayOrder(context.Background(), req, orderv1.PayOrderParams{OrderUUID: id})
+			require.NoError(t, err)
+
+			conflict, ok := res.(*orderv1.PayOrderConflict)
+			require.True(t, ok)
+			assert.Equal(t, svcErr.Error(), conflict.Message)
+		})
+	}
 }
 
 func TestHandler_CancelOrder_Success(t *testing.T) {
@@ -206,17 +214,22 @@ func TestHandler_CancelOrder_NotFound(t *testing.T) {
 	assert.True(t, ok)
 }
 
-func TestHandler_CancelOrder_AlreadyFinal(t *testing.T) {
-	id := uuid.New()
+func TestHandler_CancelOrder_StatusConflict(t *testing.T) {
+	for _, svcErr := range statusConflicts {
+		t.Run(svcErr.Error(), func(t *testing.T) {
+			id := uuid.New()
 
-	svc := mocks.NewMockService(t)
-	svc.EXPECT().CancelOrder(context.Background(), id).Return(repository.Order{}, service.ErrOrderAlreadyFinal)
+			svc := mocks.NewMockService(t)
+			svc.EXPECT().CancelOrder(context.Background(), id).Return(repository.Order{}, svcErr)
 
-	h := api.NewHandler(svc)
+			h := api.NewHandler(svc)
 
-	res, err := h.CancelOrder(context.Background(), orderv1.CancelOrderParams{OrderUUID: id})
-	require.NoError(t, err)
+			res, err := h.CancelOrder(context.Background(), orderv1.CancelOrderParams{OrderUUID: id})
+			require.NoError(t, err)
 
-	_, ok := res.(*orderv1.CancelOrderConflict)
-	assert.True(t, ok)
+			conflict, ok := res.(*orderv1.CancelOrderConflict)
+			require.True(t, ok)
+			assert.Equal(t, svcErr.Error(), conflict.Message)
+		})
+	}
 }

@@ -105,6 +105,72 @@ func (_c *MockRepository_GetPart_Call) RunAndReturn(run func(ctx context.Context
 	return _c
 }
 
+// GetPartForUpdate provides a mock function for the type MockRepository
+func (_mock *MockRepository) GetPartForUpdate(ctx context.Context, id uuid.UUID) (domain.Part, error) {
+	ret := _mock.Called(ctx, id)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetPartForUpdate")
+	}
+
+	var r0 domain.Part
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uuid.UUID) (domain.Part, error)); ok {
+		return returnFunc(ctx, id)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uuid.UUID) domain.Part); ok {
+		r0 = returnFunc(ctx, id)
+	} else {
+		r0 = ret.Get(0).(domain.Part)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, uuid.UUID) error); ok {
+		r1 = returnFunc(ctx, id)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockRepository_GetPartForUpdate_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetPartForUpdate'
+type MockRepository_GetPartForUpdate_Call struct {
+	*mock.Call
+}
+
+// GetPartForUpdate is a helper method to define mock.On call
+//   - ctx context.Context
+//   - id uuid.UUID
+func (_e *MockRepository_Expecter) GetPartForUpdate(ctx interface{}, id interface{}) *MockRepository_GetPartForUpdate_Call {
+	return &MockRepository_GetPartForUpdate_Call{Call: _e.mock.On("GetPartForUpdate", ctx, id)}
+}
+
+func (_c *MockRepository_GetPartForUpdate_Call) Run(run func(ctx context.Context, id uuid.UUID)) *MockRepository_GetPartForUpdate_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 uuid.UUID
+		if args[1] != nil {
+			arg1 = args[1].(uuid.UUID)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockRepository_GetPartForUpdate_Call) Return(part domain.Part, err error) *MockRepository_GetPartForUpdate_Call {
+	_c.Call.Return(part, err)
+	return _c
+}
+
+func (_c *MockRepository_GetPartForUpdate_Call) RunAndReturn(run func(ctx context.Context, id uuid.UUID) (domain.Part, error)) *MockRepository_GetPartForUpdate_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListParts provides a mock function for the type MockRepository
 func (_mock *MockRepository) ListParts(ctx context.Context) ([]domain.Part, error) {
 	ret := _mock.Called(ctx)

@@ -26,19 +26,21 @@ var (
 // Repository is the persistence dependency required by Service.
 type Repository interface {
 	GetPart(ctx context.Context, id uuid.UUID) (domain.Part, error)
+	GetPartForUpdate(ctx context.Context, id uuid.UUID) (domain.Part, error)
 	ListParts(ctx context.Context) ([]domain.Part, error)
 	Save(ctx context.Context, part domain.Part) error
 }
 
 // Service implements the InventoryService business logic.
 type Service struct {
-	repo    Repository
-	checker *domain.CompatibilityChecker
+	repo      Repository
+	checker   *domain.CompatibilityChecker
+	trManager TrManager
 }
 
 // NewService creates a new Service backed by the given Repository.
-func NewService(repo Repository, checker *domain.CompatibilityChecker) *Service {
-	return &Service{repo: repo, checker: checker}
+func NewService(repo Repository, checker *domain.CompatibilityChecker, trManager TrManager) *Service {
+	return &Service{repo: repo, checker: checker, trManager: trManager}
 }
 
 // GetPart returns a part by its raw UUID string.
@@ -118,9 +120,12 @@ func (s *Service) ListParts(
 	return parts, nil
 }
 
-// resolveParts parses and fetches a domain.Part for every raw UUID.
-func (s *Service) resolveParts(ctx context.Context, rawUUIDs []string) ([]domain.Part, error) {
-	parts := make([]domain.Part, 0, len(rawUUIDs))
+// lockParts parses every raw UUID and fetches its part with a row lock. The
+// UUIDs are locked in sorted order, so concurrent requests over overlapping
+// parts always acquire locks in the same order and can't deadlock. Must be
+// called inside a transaction for the locks to mean anything.
+func (s *Service) lockParts(ctx context.Context, rawUUIDs []string) ([]domain.Part, error) {
+	ids := make([]uuid.UUID, 0, len(rawUUIDs))
 
 	for _, rawUUID := range rawUUIDs {
 		id, err := uuid.Parse(rawUUID)
@@ -128,9 +133,19 @@ func (s *Service) resolveParts(ctx context.Context, rawUUIDs []string) ([]domain
 			return nil, fmt.Errorf("%w: %s", ErrInvalidUUID, rawUUID)
 		}
 
-		part, err := s.repo.GetPart(ctx, id)
+		ids = append(ids, id)
+	}
+
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i].String() < ids[j].String()
+	})
+
+	parts := make([]domain.Part, 0, len(ids))
+
+	for _, id := range ids {
+		part, err := s.repo.GetPartForUpdate(ctx, id)
 		if errors.Is(err, repository.ErrNotFound) {
-			return nil, fmt.Errorf("%w: %s", ErrPartNotFound, rawUUID)
+			return nil, fmt.Errorf("%w: %s", ErrPartNotFound, id)
 		}
 
 		if err != nil {
@@ -143,52 +158,69 @@ func (s *Service) resolveParts(ctx context.Context, rawUUIDs []string) ([]domain
 	return parts, nil
 }
 
+// updateParts locks every listed part, applies mutate to each, runs check
+// (if any) over the mutated set, and persists — all in one transaction, so
+// either every part is updated or none is.
+func (s *Service) updateParts(
+	ctx context.Context,
+	rawUUIDs []string,
+	mutate func(p *domain.Part) error,
+	check func(parts []domain.Part) error,
+) error {
+	return s.trManager.Do(ctx, func(ctx context.Context) error {
+		parts, err := s.lockParts(ctx, rawUUIDs)
+		if err != nil {
+			return err
+		}
+
+		for i := range parts {
+			if err := mutate(&parts[i]); err != nil {
+				return err
+			}
+		}
+
+		if check != nil {
+			if err := check(parts); err != nil {
+				return err
+			}
+		}
+
+		for i := range parts {
+			if err := s.repo.Save(ctx, parts[i]); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
 // ReserveParts reserves exactly one unit of every listed part, atomically as
 // a set: stock and cross-part compatibility are both checked before any
 // reservation is persisted.
 func (s *Service) ReserveParts(ctx context.Context, rawUUIDs []string) error {
-	parts, err := s.resolveParts(ctx, rawUUIDs)
-	if err != nil {
-		return err
-	}
-
-	for i := range parts {
-		if err := parts[i].Reserve(1); err != nil {
-			return err
-		}
-	}
-
-	if err := s.checker.Check(parts); err != nil {
-		return err
-	}
-
-	for i := range parts {
-		if err := s.repo.Save(ctx, parts[i]); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return s.updateParts(
+		ctx, rawUUIDs,
+		func(p *domain.Part) error { return p.Reserve(1) },
+		s.checker.Check,
+	)
 }
 
 // ReleaseParts releases a previous reservation of one unit of every listed part.
 func (s *Service) ReleaseParts(ctx context.Context, rawUUIDs []string) error {
-	parts, err := s.resolveParts(ctx, rawUUIDs)
-	if err != nil {
-		return err
-	}
+	return s.updateParts(
+		ctx, rawUUIDs,
+		func(p *domain.Part) error { return p.Release(1) },
+		nil,
+	)
+}
 
-	for i := range parts {
-		if err := parts[i].Release(1); err != nil {
-			return err
-		}
-	}
-
-	for i := range parts {
-		if err := s.repo.Save(ctx, parts[i]); err != nil {
-			return err
-		}
-	}
-
-	return nil
+// CommitParts writes off one previously-reserved unit of every listed part:
+// it leaves the warehouse after the ship has been assembled.
+func (s *Service) CommitParts(ctx context.Context, rawUUIDs []string) error {
+	return s.updateParts(
+		ctx, rawUUIDs,
+		func(p *domain.Part) error { return p.Commit(1) },
+		nil,
+	)
 }

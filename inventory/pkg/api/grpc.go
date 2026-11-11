@@ -20,6 +20,7 @@ type Service interface {
 	ListParts(ctx context.Context, partType inventoryv1.PartType, rawUUIDs []string) ([]domain.Part, error)
 	ReserveParts(ctx context.Context, rawUUIDs []string) error
 	ReleaseParts(ctx context.Context, rawUUIDs []string) error
+	CommitParts(ctx context.Context, rawUUIDs []string) error
 }
 
 // Server implements inventoryv1.InventoryServiceServer.
@@ -105,4 +106,13 @@ func (s *Server) ReleaseParts(ctx context.Context, req *inventoryv1.ReleaseParts
 	}
 
 	return &inventoryv1.ReleasePartsResponse{}, nil
+}
+
+// CommitParts writes off one reserved unit of every listed part.
+func (s *Server) CommitParts(ctx context.Context, req *inventoryv1.CommitPartsRequest) (*inventoryv1.CommitPartsResponse, error) {
+	if err := s.svc.CommitParts(ctx, req.GetUuids()); err != nil {
+		return nil, toStatusErr(err)
+	}
+
+	return &inventoryv1.CommitPartsResponse{}, nil
 }

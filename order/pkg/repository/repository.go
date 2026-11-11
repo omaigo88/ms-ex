@@ -19,6 +19,7 @@ const (
 	OrderStatusPendingPayment OrderStatus = "PENDING_PAYMENT"
 	OrderStatusPaid           OrderStatus = "PAID"
 	OrderStatusCancelled      OrderStatus = "CANCELLED"
+	OrderStatusAssembled      OrderStatus = "ASSEMBLED"
 )
 
 // PaymentMethod — order payment method.
@@ -34,6 +35,7 @@ const (
 // Order represents an order to build a spaceship.
 type Order struct {
 	OrderUUID       uuid.UUID
+	UserUUID        uuid.UUID
 	HullUUID        uuid.UUID
 	EngineUUID      uuid.UUID
 	ShieldUUID      *uuid.UUID // optional
@@ -49,4 +51,7 @@ type Order struct {
 type Repository interface {
 	Save(ctx context.Context, order Order) error
 	Get(ctx context.Context, id uuid.UUID) (Order, error)
+	// GetForUpdate is Get plus a row lock held until the surrounding
+	// transaction ends (SELECT ... FOR UPDATE).
+	GetForUpdate(ctx context.Context, id uuid.UUID) (Order, error)
 }

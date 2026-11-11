@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -18,265 +19,294 @@ import (
 	paymentv1 "github.com/omaigo88/shared/pkg/proto/payment/v1"
 )
 
-func notFoundGRPCErr() error {
-	return status.Error(codes.NotFound, "part not found")
+type deps struct {
+	inv  *mocks.MockInventoryClient
+	pay  *mocks.MockPaymentClient
+	repo *mocks.MockRepository
+	pub  *mocks.MockOrderPaidPublisher
+	svc  *service.Service
 }
 
-func outOfStockGRPCErr() error {
-	return status.Error(codes.FailedPrecondition, "insufficient stock: some-part")
+func newDeps(t *testing.T) deps {
+	t.Helper()
+
+	d := deps{
+		inv:  mocks.NewMockInventoryClient(t),
+		pay:  mocks.NewMockPaymentClient(t),
+		repo: mocks.NewMockRepository(t),
+		pub:  mocks.NewMockOrderPaidPublisher(t),
+	}
+	d.svc = service.NewService(d.inv, d.pay, d.repo, service.NewNoopTrManager(), d.pub)
+
+	return d
 }
 
-func incompatibleGRPCErr() error {
-	return status.Error(codes.FailedPrecondition, "incompatible parts: some message")
+func orderWithStatus(st repository.OrderStatus) repository.Order {
+	return repository.Order{
+		OrderUUID:  uuid.New(),
+		UserUUID:   uuid.New(),
+		HullUUID:   uuid.New(),
+		EngineUUID: uuid.New(),
+		Status:     st,
+	}
 }
+
+func partUUIDs(o repository.Order) []string {
+	return []string{o.HullUUID.String(), o.EngineUUID.String()}
+}
+
+func savedWithStatus(st repository.OrderStatus) interface{} {
+	return mock.MatchedBy(func(o repository.Order) bool { return o.Status == st })
+}
+
+// --- CreateOrder ---
 
 func TestService_CreateOrder_Success(t *testing.T) {
-	hullUUID, engineUUID := uuid.New(), uuid.New()
+	d := newDeps(t)
+	userUUID, hullUUID, engineUUID := uuid.New(), uuid.New(), uuid.New()
+	uuids := []string{hullUUID.String(), engineUUID.String()}
 
-	inv := mocks.NewMockInventoryClient(t)
-	inv.EXPECT().
-		ListParts(context.Background(), &inventoryv1.ListPartsRequest{Uuids: []string{hullUUID.String(), engineUUID.String()}}).
-		Return(&inventoryv1.ListPartsResponse{
-			Parts: []*inventoryv1.Part{
-				{Uuid: hullUUID.String(), Price: 500000, StockQuantity: 1},
-				{Uuid: engineUUID.String(), Price: 300000, StockQuantity: 1},
-			},
-		}, nil)
-
-	inv.EXPECT().
-		ReserveParts(context.Background(), &inventoryv1.ReservePartsRequest{Uuids: []string{hullUUID.String(), engineUUID.String()}}).
+	d.inv.EXPECT().ListParts(context.Background(), &inventoryv1.ListPartsRequest{Uuids: uuids}).
+		Return(&inventoryv1.ListPartsResponse{Parts: []*inventoryv1.Part{{Price: 500000}, {Price: 300000}}}, nil)
+	d.inv.EXPECT().ReserveParts(context.Background(), &inventoryv1.ReservePartsRequest{Uuids: uuids}).
 		Return(&inventoryv1.ReservePartsResponse{}, nil)
+	d.repo.EXPECT().Save(context.Background(), mock.MatchedBy(func(o repository.Order) bool {
+		return o.UserUUID == userUUID && o.Status == repository.OrderStatusPendingPayment
+	})).Return(nil)
 
-	pay := mocks.NewMockPaymentClient(t)
-	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Save(context.Background(), mock.Anything).Return(nil)
-
-	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
-
-	order, err := svc.CreateOrder(context.Background(), service.CreateOrderInput{
-		HullUUID:   hullUUID,
-		EngineUUID: engineUUID,
+	order, err := d.svc.CreateOrder(context.Background(), service.CreateOrderInput{
+		UserUUID: userUUID, HullUUID: hullUUID, EngineUUID: engineUUID,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, int64(800000), order.TotalPrice)
-	assert.Equal(t, repository.OrderStatusPendingPayment, order.Status)
+	assert.Equal(t, userUUID, order.UserUUID)
 }
 
-func TestService_CreateOrder_ComponentNotFound(t *testing.T) {
-	hullUUID, engineUUID := uuid.New(), uuid.New()
+func TestService_CreateOrder_InventoryErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		listErr    error
+		reserveErr error
+		want       error
+	}{
+		{"component not found", status.Error(codes.NotFound, "part not found"), nil, service.ErrComponentNotFound},
+		{"out of stock", nil, status.Error(codes.FailedPrecondition, "insufficient stock: p"), service.ErrComponentOutOfStock},
+		{"incompatible", nil, status.Error(codes.FailedPrecondition, "incompatible parts: x"), service.ErrIncompatibleComponents},
+	}
 
-	inv := mocks.NewMockInventoryClient(t)
-	inv.EXPECT().
-		ListParts(context.Background(), &inventoryv1.ListPartsRequest{Uuids: []string{hullUUID.String(), engineUUID.String()}}).
-		Return(nil, notFoundGRPCErr())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := newDeps(t)
 
-	pay := mocks.NewMockPaymentClient(t)
-	repo := mocks.NewMockRepository(t)
+			if tt.listErr != nil {
+				d.inv.EXPECT().ListParts(context.Background(), mock.Anything).Return(nil, tt.listErr)
+			} else {
+				d.inv.EXPECT().ListParts(context.Background(), mock.Anything).Return(&inventoryv1.ListPartsResponse{}, nil)
+				d.inv.EXPECT().ReserveParts(context.Background(), mock.Anything).Return(nil, tt.reserveErr)
+			}
 
-	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
-
-	_, err := svc.CreateOrder(context.Background(), service.CreateOrderInput{
-		HullUUID:   hullUUID,
-		EngineUUID: engineUUID,
-	})
-	require.ErrorIs(t, err, service.ErrComponentNotFound)
+			_, err := d.svc.CreateOrder(context.Background(), service.CreateOrderInput{HullUUID: uuid.New(), EngineUUID: uuid.New()})
+			require.ErrorIs(t, err, tt.want)
+		})
+	}
 }
 
-func TestService_CreateOrder_OutOfStock(t *testing.T) {
-	hullUUID, engineUUID := uuid.New(), uuid.New()
-
-	inv := mocks.NewMockInventoryClient(t)
-	inv.EXPECT().
-		ListParts(context.Background(), &inventoryv1.ListPartsRequest{Uuids: []string{hullUUID.String(), engineUUID.String()}}).
-		Return(&inventoryv1.ListPartsResponse{
-			Parts: []*inventoryv1.Part{
-				{Uuid: hullUUID.String(), Price: 500000, StockQuantity: 0},
-				{Uuid: engineUUID.String(), Price: 300000, StockQuantity: 1},
-			},
-		}, nil)
-	inv.EXPECT().
-		ReserveParts(context.Background(), &inventoryv1.ReservePartsRequest{Uuids: []string{hullUUID.String(), engineUUID.String()}}).
-		Return(nil, outOfStockGRPCErr())
-
-	pay := mocks.NewMockPaymentClient(t)
-	repo := mocks.NewMockRepository(t)
-
-	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
-
-	_, err := svc.CreateOrder(context.Background(), service.CreateOrderInput{
-		HullUUID:   hullUUID,
-		EngineUUID: engineUUID,
-	})
-	require.ErrorIs(t, err, service.ErrComponentOutOfStock)
-}
-
-func TestService_CreateOrder_Incompatible(t *testing.T) {
-	hullUUID, engineUUID := uuid.New(), uuid.New()
-
-	inv := mocks.NewMockInventoryClient(t)
-	inv.EXPECT().
-		ListParts(context.Background(), &inventoryv1.ListPartsRequest{Uuids: []string{hullUUID.String(), engineUUID.String()}}).
-		Return(&inventoryv1.ListPartsResponse{
-			Parts: []*inventoryv1.Part{
-				{Uuid: hullUUID.String(), Price: 500000, StockQuantity: 1},
-				{Uuid: engineUUID.String(), Price: 300000, StockQuantity: 1},
-			},
-		}, nil)
-	inv.EXPECT().
-		ReserveParts(context.Background(), &inventoryv1.ReservePartsRequest{Uuids: []string{hullUUID.String(), engineUUID.String()}}).
-		Return(nil, incompatibleGRPCErr())
-
-	pay := mocks.NewMockPaymentClient(t)
-	repo := mocks.NewMockRepository(t)
-
-	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
-
-	_, err := svc.CreateOrder(context.Background(), service.CreateOrderInput{
-		HullUUID:   hullUUID,
-		EngineUUID: engineUUID,
-	})
-	require.ErrorIs(t, err, service.ErrIncompatibleComponents)
-}
+// --- GetOrder ---
 
 func TestService_GetOrder_Success(t *testing.T) {
-	id := uuid.New()
-	want := repository.Order{OrderUUID: id, Status: repository.OrderStatusPendingPayment}
+	d := newDeps(t)
+	want := orderWithStatus(repository.OrderStatusPendingPayment)
+	d.repo.EXPECT().Get(context.Background(), want.OrderUUID).Return(want, nil)
 
-	inv := mocks.NewMockInventoryClient(t)
-	pay := mocks.NewMockPaymentClient(t)
-	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(context.Background(), id).Return(want, nil)
-
-	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
-
-	got, err := svc.GetOrder(context.Background(), id)
+	got, err := d.svc.GetOrder(context.Background(), want.OrderUUID)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
 }
 
 func TestService_GetOrder_NotFound(t *testing.T) {
+	d := newDeps(t)
 	id := uuid.New()
+	d.repo.EXPECT().Get(context.Background(), id).Return(repository.Order{}, repository.ErrNotFound)
 
-	inv := mocks.NewMockInventoryClient(t)
-	pay := mocks.NewMockPaymentClient(t)
-	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(context.Background(), id).Return(repository.Order{}, repository.ErrNotFound)
-
-	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
-
-	_, err := svc.GetOrder(context.Background(), id)
+	_, err := d.svc.GetOrder(context.Background(), id)
 	require.ErrorIs(t, err, service.ErrOrderNotFound)
 }
 
-func TestService_PayOrder_Success(t *testing.T) {
-	id := uuid.New()
+// --- PayOrder ---
+
+func TestService_PayOrder_Success_PublishesOrderPaid(t *testing.T) {
+	d := newDeps(t)
+	existing := orderWithStatus(repository.OrderStatusPendingPayment)
 	transactionUUID := uuid.New()
-	existing := repository.Order{OrderUUID: id, Status: repository.OrderStatusPendingPayment}
 
-	inv := mocks.NewMockInventoryClient(t)
+	d.repo.EXPECT().GetForUpdate(context.Background(), existing.OrderUUID).Return(existing, nil)
+	d.pay.EXPECT().PayOrder(context.Background(), &paymentv1.PayOrderRequest{
+		OrderUuid:     existing.OrderUUID.String(),
+		PaymentMethod: paymentv1.PaymentMethod_PAYMENT_METHOD_CARD,
+	}).Return(&paymentv1.PayOrderResponse{TransactionUuid: transactionUUID.String()}, nil)
+	d.repo.EXPECT().Save(context.Background(), savedWithStatus(repository.OrderStatusPaid)).Return(nil)
+	d.pub.EXPECT().PublishOrderPaid(context.Background(), service.OrderPaidEvent{
+		OrderUUID:       existing.OrderUUID,
+		UserUUID:        existing.UserUUID,
+		PaymentMethod:   repository.PaymentMethodCard,
+		TransactionUUID: transactionUUID,
+	}).Return(nil)
 
-	pay := mocks.NewMockPaymentClient(t)
-	pay.EXPECT().
-		PayOrder(context.Background(), &paymentv1.PayOrderRequest{
-			OrderUuid:     id.String(),
-			PaymentMethod: paymentv1.PaymentMethod_PAYMENT_METHOD_CARD,
-		}).
-		Return(&paymentv1.PayOrderResponse{TransactionUuid: transactionUUID.String()}, nil)
-
-	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(context.Background(), id).Return(existing, nil)
-	repo.EXPECT().Save(context.Background(), mock.Anything).Return(nil)
-
-	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
-
-	order, err := svc.PayOrder(context.Background(), id, repository.PaymentMethodCard)
+	order, err := d.svc.PayOrder(context.Background(), existing.OrderUUID, repository.PaymentMethodCard)
 	require.NoError(t, err)
 	assert.Equal(t, repository.OrderStatusPaid, order.Status)
-	require.NotNil(t, order.TransactionUUID)
 	assert.Equal(t, transactionUUID, *order.TransactionUUID)
 }
 
+func TestService_PayOrder_PublishFailureDoesNotFailPayment(t *testing.T) {
+	d := newDeps(t)
+	existing := orderWithStatus(repository.OrderStatusPendingPayment)
+
+	d.repo.EXPECT().GetForUpdate(context.Background(), existing.OrderUUID).Return(existing, nil)
+	d.pay.EXPECT().PayOrder(context.Background(), mock.Anything).
+		Return(&paymentv1.PayOrderResponse{TransactionUuid: uuid.NewString()}, nil)
+	d.repo.EXPECT().Save(context.Background(), mock.Anything).Return(nil)
+	d.pub.EXPECT().PublishOrderPaid(context.Background(), mock.Anything).Return(errors.New("broker down"))
+
+	order, err := d.svc.PayOrder(context.Background(), existing.OrderUUID, repository.PaymentMethodCard)
+	require.NoError(t, err)
+	assert.Equal(t, repository.OrderStatusPaid, order.Status)
+}
+
+func TestService_PayOrder_PaymentFailureNotPublished(t *testing.T) {
+	d := newDeps(t)
+	existing := orderWithStatus(repository.OrderStatusPendingPayment)
+
+	d.repo.EXPECT().GetForUpdate(context.Background(), existing.OrderUUID).Return(existing, nil)
+	d.pay.EXPECT().PayOrder(context.Background(), mock.Anything).Return(nil, errors.New("payment down"))
+	// No Save, no PublishOrderPaid expected: mocks fail the test if called.
+
+	_, err := d.svc.PayOrder(context.Background(), existing.OrderUUID, repository.PaymentMethodCard)
+	require.Error(t, err)
+}
+
 func TestService_PayOrder_NotFound(t *testing.T) {
+	d := newDeps(t)
 	id := uuid.New()
+	d.repo.EXPECT().GetForUpdate(context.Background(), id).Return(repository.Order{}, repository.ErrNotFound)
 
-	inv := mocks.NewMockInventoryClient(t)
-	pay := mocks.NewMockPaymentClient(t)
-	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(context.Background(), id).Return(repository.Order{}, repository.ErrNotFound)
-
-	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
-
-	_, err := svc.PayOrder(context.Background(), id, repository.PaymentMethodCard)
+	_, err := d.svc.PayOrder(context.Background(), id, repository.PaymentMethodCard)
 	require.ErrorIs(t, err, service.ErrOrderNotFound)
 }
 
-func TestService_PayOrder_AlreadyFinal(t *testing.T) {
-	id := uuid.New()
-	existing := repository.Order{OrderUUID: id, Status: repository.OrderStatusPaid}
+// --- status rules shared by PayOrder and CancelOrder ---
 
-	inv := mocks.NewMockInventoryClient(t)
-	pay := mocks.NewMockPaymentClient(t)
-	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(context.Background(), id).Return(existing, nil)
-
-	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
-
-	_, err := svc.PayOrder(context.Background(), id, repository.PaymentMethodCard)
-	require.ErrorIs(t, err, service.ErrOrderAlreadyFinal)
+var nonPendingStatuses = []struct {
+	status repository.OrderStatus
+	want   error
+}{
+	{repository.OrderStatusPaid, service.ErrOrderAlreadyPaid},
+	{repository.OrderStatusCancelled, service.ErrOrderCancelled},
+	{repository.OrderStatusAssembled, service.ErrOrderAssembled},
 }
 
-func TestService_CancelOrder_Success(t *testing.T) {
-	id := uuid.New()
-	hullUUID, engineUUID := uuid.New(), uuid.New()
-	existing := repository.Order{
-		OrderUUID:  id,
-		HullUUID:   hullUUID,
-		EngineUUID: engineUUID,
-		Status:     repository.OrderStatusPendingPayment,
+func TestService_PayOrder_RejectsNonPending(t *testing.T) {
+	for _, tt := range nonPendingStatuses {
+		t.Run(string(tt.status), func(t *testing.T) {
+			d := newDeps(t)
+			existing := orderWithStatus(tt.status)
+			d.repo.EXPECT().GetForUpdate(context.Background(), existing.OrderUUID).Return(existing, nil)
+
+			_, err := d.svc.PayOrder(context.Background(), existing.OrderUUID, repository.PaymentMethodCard)
+			require.ErrorIs(t, err, tt.want)
+		})
 	}
+}
 
-	inv := mocks.NewMockInventoryClient(t)
-	inv.EXPECT().
-		ReleaseParts(context.Background(), &inventoryv1.ReleasePartsRequest{Uuids: []string{hullUUID.String(), engineUUID.String()}}).
+// --- CancelOrder ---
+
+func TestService_CancelOrder_Success_ReleasesReservation(t *testing.T) {
+	d := newDeps(t)
+	existing := orderWithStatus(repository.OrderStatusPendingPayment)
+
+	d.repo.EXPECT().GetForUpdate(context.Background(), existing.OrderUUID).Return(existing, nil)
+	d.inv.EXPECT().ReleaseParts(context.Background(), &inventoryv1.ReleasePartsRequest{Uuids: partUUIDs(existing)}).
 		Return(&inventoryv1.ReleasePartsResponse{}, nil)
+	d.repo.EXPECT().Save(context.Background(), savedWithStatus(repository.OrderStatusCancelled)).Return(nil)
 
-	pay := mocks.NewMockPaymentClient(t)
-	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(context.Background(), id).Return(existing, nil)
-	repo.EXPECT().Save(context.Background(), mock.Anything).Return(nil)
-
-	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
-
-	order, err := svc.CancelOrder(context.Background(), id)
+	order, err := d.svc.CancelOrder(context.Background(), existing.OrderUUID)
 	require.NoError(t, err)
 	assert.Equal(t, repository.OrderStatusCancelled, order.Status)
 }
 
 func TestService_CancelOrder_NotFound(t *testing.T) {
+	d := newDeps(t)
 	id := uuid.New()
+	d.repo.EXPECT().GetForUpdate(context.Background(), id).Return(repository.Order{}, repository.ErrNotFound)
 
-	inv := mocks.NewMockInventoryClient(t)
-	pay := mocks.NewMockPaymentClient(t)
-	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(context.Background(), id).Return(repository.Order{}, repository.ErrNotFound)
-
-	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
-
-	_, err := svc.CancelOrder(context.Background(), id)
+	_, err := d.svc.CancelOrder(context.Background(), id)
 	require.ErrorIs(t, err, service.ErrOrderNotFound)
 }
 
-func TestService_CancelOrder_AlreadyFinal(t *testing.T) {
+// TestService_CancelOrder_RejectsNonPending covers the status table: only
+// PENDING_PAYMENT can be cancelled; every other status is a domain error and
+// nothing is released or saved.
+func TestService_CancelOrder_RejectsNonPending(t *testing.T) {
+	for _, tt := range nonPendingStatuses {
+		t.Run(string(tt.status), func(t *testing.T) {
+			d := newDeps(t)
+			existing := orderWithStatus(tt.status)
+			d.repo.EXPECT().GetForUpdate(context.Background(), existing.OrderUUID).Return(existing, nil)
+
+			_, err := d.svc.CancelOrder(context.Background(), existing.OrderUUID)
+			require.ErrorIs(t, err, tt.want)
+		})
+	}
+}
+
+// --- MarkAssembled ---
+
+func TestService_MarkAssembled_CommitsPartsAndSaves(t *testing.T) {
+	d := newDeps(t)
+	existing := orderWithStatus(repository.OrderStatusPaid)
+
+	d.repo.EXPECT().GetForUpdate(context.Background(), existing.OrderUUID).Return(existing, nil)
+	d.inv.EXPECT().CommitParts(context.Background(), &inventoryv1.CommitPartsRequest{Uuids: partUUIDs(existing)}).
+		Return(&inventoryv1.CommitPartsResponse{}, nil)
+	d.repo.EXPECT().Save(context.Background(), savedWithStatus(repository.OrderStatusAssembled)).Return(nil)
+
+	require.NoError(t, d.svc.MarkAssembled(context.Background(), existing.OrderUUID))
+}
+
+func TestService_MarkAssembled_AlreadyAssembledIsNoop(t *testing.T) {
+	d := newDeps(t)
+	existing := orderWithStatus(repository.OrderStatusAssembled)
+	d.repo.EXPECT().GetForUpdate(context.Background(), existing.OrderUUID).Return(existing, nil)
+
+	require.NoError(t, d.svc.MarkAssembled(context.Background(), existing.OrderUUID))
+}
+
+func TestService_MarkAssembled_SkipsNonPaid(t *testing.T) {
+	for _, st := range []repository.OrderStatus{repository.OrderStatusPendingPayment, repository.OrderStatusCancelled} {
+		t.Run(string(st), func(t *testing.T) {
+			d := newDeps(t)
+			existing := orderWithStatus(st)
+			d.repo.EXPECT().GetForUpdate(context.Background(), existing.OrderUUID).Return(existing, nil)
+
+			require.NoError(t, d.svc.MarkAssembled(context.Background(), existing.OrderUUID))
+		})
+	}
+}
+
+func TestService_MarkAssembled_UnknownOrderIsSkipped(t *testing.T) {
+	d := newDeps(t)
 	id := uuid.New()
-	existing := repository.Order{OrderUUID: id, Status: repository.OrderStatusCancelled}
+	d.repo.EXPECT().GetForUpdate(context.Background(), id).Return(repository.Order{}, repository.ErrNotFound)
 
-	inv := mocks.NewMockInventoryClient(t)
-	pay := mocks.NewMockPaymentClient(t)
-	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().Get(context.Background(), id).Return(existing, nil)
+	require.NoError(t, d.svc.MarkAssembled(context.Background(), id))
+}
 
-	svc := service.NewService(inv, pay, repo, service.NewNoopTrManager())
+func TestService_MarkAssembled_CommitFailureIsRetried(t *testing.T) {
+	d := newDeps(t)
+	existing := orderWithStatus(repository.OrderStatusPaid)
 
-	_, err := svc.CancelOrder(context.Background(), id)
-	require.ErrorIs(t, err, service.ErrOrderAlreadyFinal)
+	d.repo.EXPECT().GetForUpdate(context.Background(), existing.OrderUUID).Return(existing, nil)
+	d.inv.EXPECT().CommitParts(context.Background(), mock.Anything).Return(nil, errors.New("inventory down"))
+
+	require.Error(t, d.svc.MarkAssembled(context.Background(), existing.OrderUUID))
 }

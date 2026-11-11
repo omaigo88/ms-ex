@@ -27,7 +27,7 @@ vars:
   COVERAGE_FILE: '{{.COVERAGE_DIR}}/coverage.out'
   COVERAGE_THRESHOLD: '40'
 
-  MODULES: order inventory payment
+  MODULES: order inventory payment assembly
 
 tasks:
   formatters:install:
@@ -116,13 +116,13 @@ tasks:
   build:
     desc: "Builds all Go modules (go build)"
     cmds:
-      - go build ./order/... ./inventory/... ./payment/...
+      - go build ./order/... ./inventory/... ./payment/... ./assembly/...
 
   lint:
     desc: "Runs golangci-lint"
     deps: [golangci-lint:install]
     cmds:
-      - '{{.GOLANGCI_LINT}} run --allow-parallel-runners order/... inventory/... payment/... --config=.golangci.yml'
+      - '{{.GOLANGCI_LINT}} run --allow-parallel-runners order/... inventory/... payment/... assembly/... --config=.golangci.yml'
 
   proto:format:
     desc: "Formats .proto files (buf format)"
@@ -182,6 +182,12 @@ tasks:
   run:payment:
     desc: "Runs PaymentService (gRPC :50052)"
     dir: payment
+    cmds:
+      - go run ./cmd
+
+  run:assembly:
+    desc: "Runs AssemblyService (Kafka consumer/producer)"
+    dir: assembly
     cmds:
       - go run ./cmd
 
@@ -258,7 +264,7 @@ tasks:
     desc: "Runs unit tests with the race detector (excluding API tests from order/tests)"
     cmds:
       - |
-        for mod in order inventory payment; do
+        for mod in order inventory payment assembly; do
           echo "=== $mod ==="
           (cd "$mod" && MOD=$(GOWORK=off go list -m) && go test -v -race -count=1 $(go list ./... | grep -vE "^${MOD}/tests(/|$)"))
         done
@@ -269,7 +275,7 @@ tasks:
       - go test -v ./order/tests/...
 
   test:e2e:
-    desc: "Builds and runs all 3 services as real processes and smoke-tests them with curl"
+    desc: "Brings up the full Docker stack (incl. Kafka) and smoke-tests it end to end with curl"
     cmds:
       - ./scripts/e2e_test.sh
 
@@ -286,7 +292,7 @@ tasks:
     vars:
       TARGET_PACKAGES:
         sh: |
-          for mod in order inventory payment; do
+          for mod in order inventory payment assembly; do
             (cd "$mod" && go list ./... | grep -v "/mocks" | grep -E '/(api|service)($|/)')
           done | tr '\n' ','
     preconditions:
@@ -295,14 +301,14 @@ tasks:
     cmds:
       - echo "📦 Target packages:{{.TARGET_PACKAGES}}"
       - |
-        for mod in order inventory payment; do
+        for mod in order inventory payment assembly; do
           echo "=== $mod ==="
           (cd "$mod" && MOD=$(GOWORK=off go list -m) && go test -v -race -covermode=atomic -coverprofile={{.COVERAGE_DIR}}/${mod}.out -coverpkg={{.TARGET_PACKAGES}} $(go list ./... | grep -vE "^${MOD}/tests(/|$)"))
         done
       - echo "📊 Merging coverage reports..."
       - |
         head -1 {{.COVERAGE_DIR}}/order.out > {{.COVERAGE_FILE}}
-        for f in {{.COVERAGE_DIR}}/order.out {{.COVERAGE_DIR}}/inventory.out {{.COVERAGE_DIR}}/payment.out; do
+        for f in {{.COVERAGE_DIR}}/order.out {{.COVERAGE_DIR}}/inventory.out {{.COVERAGE_DIR}}/payment.out {{.COVERAGE_DIR}}/assembly.out; do
           tail -n +2 "$f" >> {{.COVERAGE_FILE}}
         done
       - echo "📊 Coverage by function:"

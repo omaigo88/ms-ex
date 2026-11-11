@@ -39,6 +39,89 @@ func (_m *MockInventoryClient) EXPECT() *MockInventoryClient_Expecter {
 	return &MockInventoryClient_Expecter{mock: &_m.Mock}
 }
 
+// CommitParts provides a mock function for the type MockInventoryClient
+func (_mock *MockInventoryClient) CommitParts(ctx context.Context, in *inventoryv1.CommitPartsRequest, opts ...grpc.CallOption) (*inventoryv1.CommitPartsResponse, error) {
+	var tmpRet mock.Arguments
+	if len(opts) > 0 {
+		tmpRet = _mock.Called(ctx, in, opts)
+	} else {
+		tmpRet = _mock.Called(ctx, in)
+	}
+	ret := tmpRet
+
+	if len(ret) == 0 {
+		panic("no return value specified for CommitParts")
+	}
+
+	var r0 *inventoryv1.CommitPartsResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *inventoryv1.CommitPartsRequest, ...grpc.CallOption) (*inventoryv1.CommitPartsResponse, error)); ok {
+		return returnFunc(ctx, in, opts...)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *inventoryv1.CommitPartsRequest, ...grpc.CallOption) *inventoryv1.CommitPartsResponse); ok {
+		r0 = returnFunc(ctx, in, opts...)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*inventoryv1.CommitPartsResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, *inventoryv1.CommitPartsRequest, ...grpc.CallOption) error); ok {
+		r1 = returnFunc(ctx, in, opts...)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockInventoryClient_CommitParts_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CommitParts'
+type MockInventoryClient_CommitParts_Call struct {
+	*mock.Call
+}
+
+// CommitParts is a helper method to define mock.On call
+//   - ctx context.Context
+//   - in *inventoryv1.CommitPartsRequest
+//   - opts ...grpc.CallOption
+func (_e *MockInventoryClient_Expecter) CommitParts(ctx interface{}, in interface{}, opts ...interface{}) *MockInventoryClient_CommitParts_Call {
+	return &MockInventoryClient_CommitParts_Call{Call: _e.mock.On("CommitParts",
+		append([]interface{}{ctx, in}, opts...)...)}
+}
+
+func (_c *MockInventoryClient_CommitParts_Call) Run(run func(ctx context.Context, in *inventoryv1.CommitPartsRequest, opts ...grpc.CallOption)) *MockInventoryClient_CommitParts_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 *inventoryv1.CommitPartsRequest
+		if args[1] != nil {
+			arg1 = args[1].(*inventoryv1.CommitPartsRequest)
+		}
+		var arg2 []grpc.CallOption
+		var variadicArgs []grpc.CallOption
+		if len(args) > 2 {
+			variadicArgs = args[2].([]grpc.CallOption)
+		}
+		arg2 = variadicArgs
+		run(
+			arg0,
+			arg1,
+			arg2...,
+		)
+	})
+	return _c
+}
+
+func (_c *MockInventoryClient_CommitParts_Call) Return(commitPartsResponse *inventoryv1.CommitPartsResponse, err error) *MockInventoryClient_CommitParts_Call {
+	_c.Call.Return(commitPartsResponse, err)
+	return _c
+}
+
+func (_c *MockInventoryClient_CommitParts_Call) RunAndReturn(run func(ctx context.Context, in *inventoryv1.CommitPartsRequest, opts ...grpc.CallOption) (*inventoryv1.CommitPartsResponse, error)) *MockInventoryClient_CommitParts_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListParts provides a mock function for the type MockInventoryClient
 func (_mock *MockInventoryClient) ListParts(ctx context.Context, in *inventoryv1.ListPartsRequest, opts ...grpc.CallOption) (*inventoryv1.ListPartsResponse, error) {
 	var tmpRet mock.Arguments

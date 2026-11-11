@@ -21,6 +21,10 @@ service InventoryService {
   // ReleaseParts releases a previous reservation of one unit of every
   // listed part.
   rpc ReleaseParts(ReleasePartsRequest) returns (ReleasePartsResponse);
+
+  // CommitParts finalizes a reservation: one unit of every listed part leaves
+  // the warehouse (both reserved and stock quantity are decremented).
+  rpc CommitParts(CommitPartsRequest) returns (CommitPartsResponse);
 }
 
 // Part type
@@ -89,3 +93,11 @@ message ReleasePartsRequest {
 
 // Response for a release parts request
 message ReleasePartsResponse {}
+
+// Request to commit (write off) one reserved unit of each listed part
+message CommitPartsRequest {
+  repeated string uuids = 1;
+}
+
+// Response for a commit parts request
+message CommitPartsResponse {}

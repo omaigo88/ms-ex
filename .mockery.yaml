@@ -20,3 +20,9 @@ packages:
   github.com/omaigo88/order/pkg/api:
     config:
       all: true
+  github.com/omaigo88/order/pkg/kafka:
+    config:
+      all: true
+  github.com/omaigo88/assembly/pkg/kafka:
+    config:
+      all: true

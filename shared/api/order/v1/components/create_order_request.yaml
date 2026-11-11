@@ -1,8 +1,14 @@
 type: object
 required:
+  - user_uuid
   - hull_uuid
   - engine_uuid
 properties:
+  user_uuid:
+    type: string
+    format: uuid
+    description: UUID of the user placing the order (required, v4)
+    example: "7c9e6679-7425-40de-944b-e07fc1f90ae7"
   hull_uuid:
     type: string
     format: uuid

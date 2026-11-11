@@ -117,6 +117,12 @@ func (r *memoryRepository) GetPart(_ context.Context, id uuid.UUID) (domain.Part
 	return RecordToDomain(rec)
 }
 
+// GetPartForUpdate is GetPart: the in-memory repository has no transactions
+// to hold a lock for (its mutex already serializes each call).
+func (r *memoryRepository) GetPartForUpdate(ctx context.Context, id uuid.UUID) (domain.Part, error) {
+	return r.GetPart(ctx, id)
+}
+
 // ListParts returns every part in the catalog.
 func (r *memoryRepository) ListParts(_ context.Context) ([]domain.Part, error) {
 	r.mu.RLock()
@@ -136,7 +142,7 @@ func (r *memoryRepository) ListParts(_ context.Context) ([]domain.Part, error) {
 	return parts, nil
 }
 
-// Save persists part's Reserved count.
+// Save persists part's reserved and stock quantities.
 func (r *memoryRepository) Save(_ context.Context, part domain.Part) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -147,6 +153,7 @@ func (r *memoryRepository) Save(_ context.Context, part domain.Part) error {
 	}
 
 	rec.Reserved = part.Reserved()
+	rec.StockQuantity = part.StockQuantity()
 	r.parts[part.ID()] = rec
 
 	return nil

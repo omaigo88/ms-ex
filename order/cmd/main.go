@@ -35,6 +35,20 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	consumerDone := make(chan struct{})
+
+	go func() {
+		defer close(consumerDone)
+
+		slog.Info("starting ShipAssembled consumer")
+
+		if consumeErr := container.RunConsumer(ctx); consumeErr != nil {
+			slog.Error("ShipAssembled consumer stopped", "error", consumeErr)
+			stop() // take the HTTP server down too rather than run half a service
+		}
+	}()
+	defer func() { <-consumerDone }()
+
 	go func() {
 		<-ctx.Done()
 		slog.Info("shutdown signal received, stopping OrderService")

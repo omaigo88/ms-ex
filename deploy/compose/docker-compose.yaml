@@ -1,5 +1,6 @@
 # Single compose file for the whole infrastructure: Order, Inventory,
-# Payment, and Order/Inventory's own Postgres instances. All services share
+# Payment, Assembly, Order/Inventory's own Postgres instances, and Kafka
+# (+ Kafka UI on localhost:8090). All services share
 # the project's default network and reach each other by service name
 # (e.g. Order calls Inventory at "inventory:50051") — no external network or
 # host.docker.internal hack needed since everything lives in one project.
@@ -19,6 +20,7 @@ services:
       DB_URI: postgres://${ORDER_POSTGRES_USER}:${ORDER_POSTGRES_PASSWORD}@order-postgres:5432/${ORDER_POSTGRES_DB}?sslmode=disable
       INVENTORY_SERVICE_ADDRESS: ${INVENTORY_SERVICE_ADDRESS}
       PAYMENT_SERVICE_ADDRESS: ${PAYMENT_SERVICE_ADDRESS}
+      KAFKA_BROKERS: kafka:9092
     depends_on:
       order-postgres:
         condition: service_healthy
@@ -26,6 +28,8 @@ services:
         condition: service_started
       payment:
         condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
 
   order-postgres:
     image: postgres:16-alpine
@@ -79,6 +83,71 @@ services:
     ports:
       - "50052:50052"
 
+  assembly:
+    build:
+      context: ../..
+      dockerfile: assembly/Dockerfile
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      ASSEMBLY_BUILD_DELAY_MIN: ${ASSEMBLY_BUILD_DELAY_MIN:-5s}
+      ASSEMBLY_BUILD_DELAY_MAX: ${ASSEMBLY_BUILD_DELAY_MAX:-15s}
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
+  # Single-node KRaft broker. PLAINTEXT is the in-network listener the
+  # services use (kafka:9092); EXTERNAL is for host-run tools and
+  # `task run:*` (localhost:9094).
+  kafka:
+    image: apache/kafka:4.3.2
+    ports:
+      - "9094:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  # Creates topics up front so consumers never race topic auto-creation.
+  kafka-init:
+    image: apache/kafka:4.3.2
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for topic in order.paid ship.assembled; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic "$$topic" --partitions 3 --replication-factor 1
+        done
+
+  kafka-ui:
+    image: kafbat/kafka-ui:v1.5.0
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: ms-ex
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
 volumes:
+  kafka-data:
   order-postgres-data:
   inventory-postgres-data:

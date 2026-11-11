@@ -527,6 +527,88 @@ func (*ReleasePartsResponse) Descriptor() ([]byte, []int) {
 	return file_inventory_v1_inventory_proto_rawDescGZIP(), []int{8}
 }
 
+// Request to commit (write off) one reserved unit of each listed part
+type CommitPartsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Uuids         []string               `protobuf:"bytes,1,rep,name=uuids,proto3" json:"uuids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommitPartsRequest) Reset() {
+	*x = CommitPartsRequest{}
+	mi := &file_inventory_v1_inventory_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommitPartsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommitPartsRequest) ProtoMessage() {}
+
+func (x *CommitPartsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_inventory_v1_inventory_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommitPartsRequest.ProtoReflect.Descriptor instead.
+func (*CommitPartsRequest) Descriptor() ([]byte, []int) {
+	return file_inventory_v1_inventory_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *CommitPartsRequest) GetUuids() []string {
+	if x != nil {
+		return x.Uuids
+	}
+	return nil
+}
+
+// Response for a commit parts request
+type CommitPartsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommitPartsResponse) Reset() {
+	*x = CommitPartsResponse{}
+	mi := &file_inventory_v1_inventory_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommitPartsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommitPartsResponse) ProtoMessage() {}
+
+func (x *CommitPartsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_inventory_v1_inventory_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommitPartsResponse.ProtoReflect.Descriptor instead.
+func (*CommitPartsResponse) Descriptor() ([]byte, []int) {
+	return file_inventory_v1_inventory_proto_rawDescGZIP(), []int{10}
+}
+
 var File_inventory_v1_inventory_proto protoreflect.FileDescriptor
 
 const file_inventory_v1_inventory_proto_rawDesc = "" +
@@ -555,18 +637,22 @@ const file_inventory_v1_inventory_proto_rawDesc = "" +
 	"\x14ReservePartsResponse\"+\n" +
 	"\x13ReleasePartsRequest\x12\x14\n" +
 	"\x05uuids\x18\x01 \x03(\tR\x05uuids\"\x16\n" +
-	"\x14ReleasePartsResponse*{\n" +
+	"\x14ReleasePartsResponse\"*\n" +
+	"\x12CommitPartsRequest\x12\x14\n" +
+	"\x05uuids\x18\x01 \x03(\tR\x05uuids\"\x15\n" +
+	"\x13CommitPartsResponse*{\n" +
 	"\bPartType\x12\x19\n" +
 	"\x15PART_TYPE_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0ePART_TYPE_HULL\x10\x01\x12\x14\n" +
 	"\x10PART_TYPE_ENGINE\x10\x02\x12\x14\n" +
 	"\x10PART_TYPE_SHIELD\x10\x03\x12\x14\n" +
-	"\x10PART_TYPE_WEAPON\x10\x042\xd6\x02\n" +
+	"\x10PART_TYPE_WEAPON\x10\x042\xaa\x03\n" +
 	"\x10InventoryService\x12F\n" +
 	"\aGetPart\x12\x1c.inventory.v1.GetPartRequest\x1a\x1d.inventory.v1.GetPartResponse\x12L\n" +
 	"\tListParts\x12\x1e.inventory.v1.ListPartsRequest\x1a\x1f.inventory.v1.ListPartsResponse\x12U\n" +
 	"\fReserveParts\x12!.inventory.v1.ReservePartsRequest\x1a\".inventory.v1.ReservePartsResponse\x12U\n" +
-	"\fReleaseParts\x12!.inventory.v1.ReleasePartsRequest\x1a\".inventory.v1.ReleasePartsResponseB?Z=github.com/omaigo88/shared/pkg/proto/inventory/v1;inventoryv1b\x06proto3"
+	"\fReleaseParts\x12!.inventory.v1.ReleasePartsRequest\x1a\".inventory.v1.ReleasePartsResponse\x12R\n" +
+	"\vCommitParts\x12 .inventory.v1.CommitPartsRequest\x1a!.inventory.v1.CommitPartsResponseB?Z=github.com/omaigo88/shared/pkg/proto/inventory/v1;inventoryv1b\x06proto3"
 
 var (
 	file_inventory_v1_inventory_proto_rawDescOnce sync.Once
@@ -581,7 +667,7 @@ func file_inventory_v1_inventory_proto_rawDescGZIP() []byte {
 }
 
 var file_inventory_v1_inventory_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_inventory_v1_inventory_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_inventory_v1_inventory_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_inventory_v1_inventory_proto_goTypes = []any{
 	(PartType)(0),                 // 0: inventory.v1.PartType
 	(*Part)(nil),                  // 1: inventory.v1.Part
@@ -593,11 +679,13 @@ var file_inventory_v1_inventory_proto_goTypes = []any{
 	(*ReservePartsResponse)(nil),  // 7: inventory.v1.ReservePartsResponse
 	(*ReleasePartsRequest)(nil),   // 8: inventory.v1.ReleasePartsRequest
 	(*ReleasePartsResponse)(nil),  // 9: inventory.v1.ReleasePartsResponse
-	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
+	(*CommitPartsRequest)(nil),    // 10: inventory.v1.CommitPartsRequest
+	(*CommitPartsResponse)(nil),   // 11: inventory.v1.CommitPartsResponse
+	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
 }
 var file_inventory_v1_inventory_proto_depIdxs = []int32{
 	0,  // 0: inventory.v1.Part.part_type:type_name -> inventory.v1.PartType
-	10, // 1: inventory.v1.Part.created_at:type_name -> google.protobuf.Timestamp
+	12, // 1: inventory.v1.Part.created_at:type_name -> google.protobuf.Timestamp
 	1,  // 2: inventory.v1.GetPartResponse.part:type_name -> inventory.v1.Part
 	0,  // 3: inventory.v1.ListPartsRequest.part_type:type_name -> inventory.v1.PartType
 	1,  // 4: inventory.v1.ListPartsResponse.parts:type_name -> inventory.v1.Part
@@ -605,12 +693,14 @@ var file_inventory_v1_inventory_proto_depIdxs = []int32{
 	4,  // 6: inventory.v1.InventoryService.ListParts:input_type -> inventory.v1.ListPartsRequest
 	6,  // 7: inventory.v1.InventoryService.ReserveParts:input_type -> inventory.v1.ReservePartsRequest
 	8,  // 8: inventory.v1.InventoryService.ReleaseParts:input_type -> inventory.v1.ReleasePartsRequest
-	3,  // 9: inventory.v1.InventoryService.GetPart:output_type -> inventory.v1.GetPartResponse
-	5,  // 10: inventory.v1.InventoryService.ListParts:output_type -> inventory.v1.ListPartsResponse
-	7,  // 11: inventory.v1.InventoryService.ReserveParts:output_type -> inventory.v1.ReservePartsResponse
-	9,  // 12: inventory.v1.InventoryService.ReleaseParts:output_type -> inventory.v1.ReleasePartsResponse
-	9,  // [9:13] is the sub-list for method output_type
-	5,  // [5:9] is the sub-list for method input_type
+	10, // 9: inventory.v1.InventoryService.CommitParts:input_type -> inventory.v1.CommitPartsRequest
+	3,  // 10: inventory.v1.InventoryService.GetPart:output_type -> inventory.v1.GetPartResponse
+	5,  // 11: inventory.v1.InventoryService.ListParts:output_type -> inventory.v1.ListPartsResponse
+	7,  // 12: inventory.v1.InventoryService.ReserveParts:output_type -> inventory.v1.ReservePartsResponse
+	9,  // 13: inventory.v1.InventoryService.ReleaseParts:output_type -> inventory.v1.ReleasePartsResponse
+	11, // 14: inventory.v1.InventoryService.CommitParts:output_type -> inventory.v1.CommitPartsResponse
+	10, // [10:15] is the sub-list for method output_type
+	5,  // [5:10] is the sub-list for method input_type
 	5,  // [5:5] is the sub-list for extension type_name
 	5,  // [5:5] is the sub-list for extension extendee
 	0,  // [0:5] is the sub-list for field type_name
@@ -627,7 +717,7 @@ func file_inventory_v1_inventory_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_inventory_v1_inventory_proto_rawDesc), len(file_inventory_v1_inventory_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

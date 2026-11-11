@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	trmpgx "github.com/avito-tech/go-transaction-manager/drivers/pgxv5/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,14 +13,21 @@ import (
 	"github.com/omaigo88/inventory/pkg/domain"
 )
 
+const selectPartColumns = `
+	SELECT uuid, name, description, price, part_type, properties, stock_quantity, reserved, created_at
+	FROM parts`
+
 // postgresRepository is a PostgreSQL-backed Repository implementation.
 type postgresRepository struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	getter *trmpgx.CtxGetter
 }
 
 // NewPostgresRepository creates a Repository backed by the given pgx pool.
+// Queries run inside an active transaction manager transaction (if one is
+// present on ctx) or directly against the pool otherwise.
 func NewPostgresRepository(pool *pgxpool.Pool) Repository {
-	return &postgresRepository{pool: pool}
+	return &postgresRepository{pool: pool, getter: trmpgx.DefaultCtxGetter}
 }
 
 func scanPartRecord(row interface{ Scan(...any) error }) (PartRecord, error) {
@@ -33,15 +41,10 @@ func scanPartRecord(row interface{ Scan(...any) error }) (PartRecord, error) {
 	return rec, err
 }
 
-// GetPart returns a part by UUID.
-func (r *postgresRepository) GetPart(ctx context.Context, id uuid.UUID) (domain.Part, error) {
-	row := r.pool.QueryRow(ctx, `
-		SELECT uuid, name, description, price, part_type, properties, stock_quantity, reserved, created_at
-		FROM parts
-		WHERE uuid = $1
-	`, id)
+func (r *postgresRepository) getPart(ctx context.Context, query string, id uuid.UUID) (domain.Part, error) {
+	conn := r.getter.DefaultTrOrDB(ctx, r.pool)
 
-	rec, err := scanPartRecord(row)
+	rec, err := scanPartRecord(conn.QueryRow(ctx, query, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Part{}, ErrNotFound
 	}
@@ -53,12 +56,22 @@ func (r *postgresRepository) GetPart(ctx context.Context, id uuid.UUID) (domain.
 	return RecordToDomain(rec)
 }
 
+// GetPart returns a part by UUID.
+func (r *postgresRepository) GetPart(ctx context.Context, id uuid.UUID) (domain.Part, error) {
+	return r.getPart(ctx, selectPartColumns+` WHERE uuid = $1`, id)
+}
+
+// GetPartForUpdate returns a part by UUID and locks its row until the
+// surrounding transaction ends.
+func (r *postgresRepository) GetPartForUpdate(ctx context.Context, id uuid.UUID) (domain.Part, error) {
+	return r.getPart(ctx, selectPartColumns+` WHERE uuid = $1 FOR UPDATE`, id)
+}
+
 // ListParts returns every part in the catalog.
 func (r *postgresRepository) ListParts(ctx context.Context) ([]domain.Part, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT uuid, name, description, price, part_type, properties, stock_quantity, reserved, created_at
-		FROM parts
-	`)
+	conn := r.getter.DefaultTrOrDB(ctx, r.pool)
+
+	rows, err := conn.Query(ctx, selectPartColumns)
 	if err != nil {
 		return nil, fmt.Errorf("list parts: %w", err)
 	}
@@ -87,9 +100,15 @@ func (r *postgresRepository) ListParts(ctx context.Context) ([]domain.Part, erro
 	return parts, nil
 }
 
-// Save persists part's Reserved count.
+// Save persists part's reserved and stock quantities.
 func (r *postgresRepository) Save(ctx context.Context, part domain.Part) error {
-	tag, err := r.pool.Exec(ctx, `UPDATE parts SET reserved = $1 WHERE uuid = $2`, part.Reserved(), part.ID())
+	conn := r.getter.DefaultTrOrDB(ctx, r.pool)
+
+	tag, err := conn.Exec(
+		ctx,
+		`UPDATE parts SET reserved = $1, stock_quantity = $2 WHERE uuid = $3`,
+		part.Reserved(), part.StockQuantity(), part.ID(),
+	)
 	if err != nil {
 		return fmt.Errorf("save part: %w", err)
 	}

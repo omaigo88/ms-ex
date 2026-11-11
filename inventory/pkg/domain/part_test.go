@@ -99,3 +99,29 @@ func TestPart_Release_InvalidQuantity(t *testing.T) {
 
 	require.ErrorIs(t, part.Release(0), domain.ErrInvalidQuantity)
 }
+
+func TestPart_Commit_Success(t *testing.T) {
+	part, err := domain.NewPart(uuid.New(), "n", "d", 1, domain.PartTypeHull, hullProps(), 10, 3, time.Now())
+	require.NoError(t, err)
+
+	require.NoError(t, part.Commit(2))
+	assert.Equal(t, int64(1), part.Reserved())
+	assert.Equal(t, int64(8), part.StockQuantity())
+	assert.Equal(t, int64(7), part.Available(), "committing must not change what's available to reserve")
+}
+
+func TestPart_Commit_Underflow(t *testing.T) {
+	part, err := domain.NewPart(uuid.New(), "n", "d", 1, domain.PartTypeHull, hullProps(), 10, 1, time.Now())
+	require.NoError(t, err)
+
+	require.ErrorIs(t, part.Commit(2), domain.ErrReservationUnderflow)
+	assert.Equal(t, int64(1), part.Reserved())
+	assert.Equal(t, int64(10), part.StockQuantity())
+}
+
+func TestPart_Commit_InvalidQuantity(t *testing.T) {
+	part, err := domain.NewPart(uuid.New(), "n", "d", 1, domain.PartTypeHull, hullProps(), 10, 1, time.Now())
+	require.NoError(t, err)
+
+	require.ErrorIs(t, part.Commit(0), domain.ErrInvalidQuantity)
+}

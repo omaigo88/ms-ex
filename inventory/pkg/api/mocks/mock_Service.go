@@ -39,6 +39,63 @@ func (_m *MockService) EXPECT() *MockService_Expecter {
 	return &MockService_Expecter{mock: &_m.Mock}
 }
 
+// CommitParts provides a mock function for the type MockService
+func (_mock *MockService) CommitParts(ctx context.Context, rawUUIDs []string) error {
+	ret := _mock.Called(ctx, rawUUIDs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CommitParts")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []string) error); ok {
+		r0 = returnFunc(ctx, rawUUIDs)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockService_CommitParts_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CommitParts'
+type MockService_CommitParts_Call struct {
+	*mock.Call
+}
+
+// CommitParts is a helper method to define mock.On call
+//   - ctx context.Context
+//   - rawUUIDs []string
+func (_e *MockService_Expecter) CommitParts(ctx interface{}, rawUUIDs interface{}) *MockService_CommitParts_Call {
+	return &MockService_CommitParts_Call{Call: _e.mock.On("CommitParts", ctx, rawUUIDs)}
+}
+
+func (_c *MockService_CommitParts_Call) Run(run func(ctx context.Context, rawUUIDs []string)) *MockService_CommitParts_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 []string
+		if args[1] != nil {
+			arg1 = args[1].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockService_CommitParts_Call) Return(err error) *MockService_CommitParts_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockService_CommitParts_Call) RunAndReturn(run func(ctx context.Context, rawUUIDs []string) error) *MockService_CommitParts_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetPart provides a mock function for the type MockService
 func (_mock *MockService) GetPart(ctx context.Context, rawUUID string) (domain.Part, error) {
 	ret := _mock.Called(ctx, rawUUID)

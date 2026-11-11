@@ -1,6 +1,7 @@
 type: object
 required:
   - order_uuid
+  - user_uuid
   - hull_uuid
   - engine_uuid
   - total_price
@@ -12,6 +13,11 @@ properties:
     format: uuid
     description: Order UUID (v4)
     example: "550e8400-e29b-41d4-a716-446655440000"
+  user_uuid:
+    type: string
+    format: uuid
+    description: UUID of the user who placed the order (v4)
+    example: "7c9e6679-7425-40de-944b-e07fc1f90ae7"
   hull_uuid:
     type: string
     format: uuid

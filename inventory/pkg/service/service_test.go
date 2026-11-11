@@ -50,7 +50,7 @@ func samplePart(t *testing.T, id uuid.UUID, name string, partType domain.PartTyp
 }
 
 func newTestService(repo service.Repository) *service.Service {
-	return service.NewService(repo, domain.NewCompatibilityChecker())
+	return service.NewService(repo, domain.NewCompatibilityChecker(), service.NewNoopTrManager())
 }
 
 func TestService_GetPart_Success(t *testing.T) {
@@ -172,8 +172,8 @@ func TestService_ReserveParts_Success(t *testing.T) {
 	engine := samplePart(t, engineID, "Engine", domain.PartTypeEngine)
 
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().GetPart(context.Background(), hullID).Return(hull, nil)
-	repo.EXPECT().GetPart(context.Background(), engineID).Return(engine, nil)
+	repo.EXPECT().GetPartForUpdate(context.Background(), hullID).Return(hull, nil)
+	repo.EXPECT().GetPartForUpdate(context.Background(), engineID).Return(engine, nil)
 	repo.EXPECT().Save(context.Background(), mockPartWithReserved(1)).Return(nil).Times(2)
 
 	svc := newTestService(repo)
@@ -186,7 +186,7 @@ func TestService_ReserveParts_NotFound(t *testing.T) {
 	id := uuid.New()
 
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().GetPart(context.Background(), id).Return(domain.Part{}, repository.ErrNotFound)
+	repo.EXPECT().GetPartForUpdate(context.Background(), id).Return(domain.Part{}, repository.ErrNotFound)
 
 	svc := newTestService(repo)
 
@@ -200,7 +200,7 @@ func TestService_ReserveParts_InsufficientStock(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().GetPart(context.Background(), id).Return(part, nil)
+	repo.EXPECT().GetPartForUpdate(context.Background(), id).Return(part, nil)
 
 	svc := newTestService(repo)
 
@@ -219,8 +219,8 @@ func TestService_ReserveParts_Incompatible(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().GetPart(context.Background(), hullID).Return(hull, nil)
-	repo.EXPECT().GetPart(context.Background(), engineID).Return(engine, nil)
+	repo.EXPECT().GetPartForUpdate(context.Background(), hullID).Return(hull, nil)
+	repo.EXPECT().GetPartForUpdate(context.Background(), engineID).Return(engine, nil)
 
 	svc := newTestService(repo)
 
@@ -234,7 +234,7 @@ func TestService_ReleaseParts_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().GetPart(context.Background(), id).Return(part, nil)
+	repo.EXPECT().GetPartForUpdate(context.Background(), id).Return(part, nil)
 	repo.EXPECT().Save(context.Background(), mockPartWithReserved(0)).Return(nil)
 
 	svc := newTestService(repo)
@@ -249,10 +249,74 @@ func TestService_ReleaseParts_Underflow(t *testing.T) {
 	require.NoError(t, err)
 
 	repo := mocks.NewMockRepository(t)
-	repo.EXPECT().GetPart(context.Background(), id).Return(part, nil)
+	repo.EXPECT().GetPartForUpdate(context.Background(), id).Return(part, nil)
 
 	svc := newTestService(repo)
 
 	err = svc.ReleaseParts(context.Background(), []string{id.String()})
 	require.ErrorIs(t, err, domain.ErrReservationUnderflow)
+}
+
+func TestService_CommitParts_Success(t *testing.T) {
+	id := uuid.New()
+	part, err := domain.NewPart(id, "Hull", "d", 1, domain.PartTypeHull, propertiesFor(domain.PartTypeHull), 10, 1, time.Now())
+	require.NoError(t, err)
+
+	repo := mocks.NewMockRepository(t)
+	repo.EXPECT().GetPartForUpdate(context.Background(), id).Return(part, nil)
+	repo.EXPECT().Save(context.Background(), mock.MatchedBy(func(p domain.Part) bool {
+		return p.Reserved() == 0 && p.StockQuantity() == 9
+	})).Return(nil)
+
+	svc := newTestService(repo)
+
+	require.NoError(t, svc.CommitParts(context.Background(), []string{id.String()}))
+}
+
+func TestService_CommitParts_NothingReserved(t *testing.T) {
+	id := uuid.New()
+	part, err := domain.NewPart(id, "Hull", "d", 1, domain.PartTypeHull, propertiesFor(domain.PartTypeHull), 10, 0, time.Now())
+	require.NoError(t, err)
+
+	repo := mocks.NewMockRepository(t)
+	repo.EXPECT().GetPartForUpdate(context.Background(), id).Return(part, nil)
+
+	svc := newTestService(repo)
+
+	err = svc.CommitParts(context.Background(), []string{id.String()})
+	require.ErrorIs(t, err, domain.ErrReservationUnderflow)
+}
+
+func TestService_CommitParts_InvalidUUID(t *testing.T) {
+	svc := newTestService(mocks.NewMockRepository(t))
+
+	err := svc.CommitParts(context.Background(), []string{"not-a-uuid"})
+	require.ErrorIs(t, err, service.ErrInvalidUUID)
+}
+
+// TestService_ReserveParts_LocksInSortedOrder guards the deadlock-avoidance
+// rule: rows are locked in UUID order regardless of request order.
+func TestService_ReserveParts_LocksInSortedOrder(t *testing.T) {
+	low := uuid.MustParse("00000000-0000-4000-8000-000000000001")
+	high := uuid.MustParse("ffffffff-0000-4000-8000-000000000001")
+
+	var locked []uuid.UUID
+
+	repo := mocks.NewMockRepository(t)
+	repo.EXPECT().GetPartForUpdate(context.Background(), mock.Anything).
+		RunAndReturn(func(_ context.Context, id uuid.UUID) (domain.Part, error) {
+			locked = append(locked, id)
+			partType := domain.PartTypeShield
+			if id == low {
+				partType = domain.PartTypeWeapon
+			}
+
+			return samplePart(t, id, "p", partType), nil
+		}).Times(2)
+	repo.EXPECT().Save(context.Background(), mock.Anything).Return(nil).Times(2)
+
+	svc := newTestService(repo)
+
+	require.NoError(t, svc.ReserveParts(context.Background(), []string{high.String(), low.String()}))
+	assert.Equal(t, []uuid.UUID{low, high}, locked)
 }

@@ -61,6 +61,7 @@ func toOrderDto(order repository.Order) *orderv1.OrderDto {
 
 	return &orderv1.OrderDto{
 		OrderUUID:       order.OrderUUID,
+		UserUUID:        order.UserUUID,
 		HullUUID:        order.HullUUID,
 		EngineUUID:      order.EngineUUID,
 		ShieldUUID:      shieldUUID,
@@ -71,6 +72,14 @@ func toOrderDto(order repository.Order) *orderv1.OrderDto {
 		Status:          orderv1.OrderStatus(order.Status),
 		CreatedAt:       order.CreatedAt,
 	}
+}
+
+// isOrderStatusConflict reports whether err means the order isn't in the
+// PENDING_PAYMENT state an operation requires.
+func isOrderStatusConflict(err error) bool {
+	return errors.Is(err, orderService.ErrOrderAlreadyPaid) ||
+		errors.Is(err, orderService.ErrOrderCancelled) ||
+		errors.Is(err, orderService.ErrOrderAssembled)
 }
 
 // GetOrder implements the getOrder operation
@@ -95,6 +104,7 @@ func (h *Handler) GetOrder(ctx context.Context, params orderv1.GetOrderParams) (
 // POST /api/v1/orders.
 func (h *Handler) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest) (orderv1.CreateOrderRes, error) {
 	input := orderService.CreateOrderInput{
+		UserUUID:   req.GetUserUUID(),
 		HullUUID:   req.GetHullUUID(),
 		EngineUUID: req.GetEngineUUID(),
 	}
@@ -149,10 +159,10 @@ func (h *Handler) PayOrder(ctx context.Context, req *orderv1.PayOrderRequest, pa
 				Code:    http.StatusNotFound,
 				Message: "order not found",
 			}, nil
-		case errors.Is(err, orderService.ErrOrderAlreadyFinal):
+		case isOrderStatusConflict(err):
 			return &orderv1.PayOrderConflict{
 				Code:    http.StatusConflict,
-				Message: "order is already paid or cancelled",
+				Message: err.Error(),
 			}, nil
 		default:
 			return nil, err
@@ -175,10 +185,10 @@ func (h *Handler) CancelOrder(ctx context.Context, params orderv1.CancelOrderPar
 				Code:    http.StatusNotFound,
 				Message: "order not found",
 			}, nil
-		case errors.Is(err, orderService.ErrOrderAlreadyFinal):
+		case isOrderStatusConflict(err):
 			return &orderv1.CancelOrderConflict{
 				Code:    http.StatusConflict,
-				Message: "order is already paid or cancelled",
+				Message: err.Error(),
 			}, nil
 		default:
 			return nil, err

@@ -215,3 +215,31 @@ func TestServer_ReleaseParts_Underflow(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, codes.FailedPrecondition, st.Code())
 }
+
+func TestServer_CommitParts_Success(t *testing.T) {
+	uuids := []string{uuid.New().String()}
+
+	svc := mocks.NewMockService(t)
+	svc.EXPECT().CommitParts(context.Background(), uuids).Return(nil)
+
+	server := api.NewServer(svc)
+
+	_, err := server.CommitParts(context.Background(), &inventoryv1.CommitPartsRequest{Uuids: uuids})
+	require.NoError(t, err)
+}
+
+func TestServer_CommitParts_Underflow(t *testing.T) {
+	uuids := []string{uuid.New().String()}
+
+	svc := mocks.NewMockService(t)
+	svc.EXPECT().CommitParts(context.Background(), uuids).Return(domain.ErrReservationUnderflow)
+
+	server := api.NewServer(svc)
+
+	_, err := server.CommitParts(context.Background(), &inventoryv1.CommitPartsRequest{Uuids: uuids})
+	require.Error(t, err)
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.FailedPrecondition, st.Code())
+}

@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package events.v1;
+
+option go_package = "github.com/omaigo88/shared/pkg/proto/events/v1;eventsv1";
+
+// OrderPaid is published by OrderService to the order.paid topic once an order
+// has been paid. It triggers ship assembly.
+message OrderPaid {
+  // Unique event identifier (for deduplication)
+  string event_uuid = 1;
+  // Paid order UUID
+  string order_uuid = 2;
+  // UUID of the user who placed the order
+  string user_uuid = 3;
+  // Payment method used (CARD, SBP, CREDIT_CARD, INVESTOR_MONEY)
+  string payment_method = 4;
+  // Payment transaction UUID
+  string transaction_uuid = 5;
+}
+
+// ShipAssembled is published by AssemblyService to the ship.assembled topic
+// once the ship for a paid order has been assembled.
+message ShipAssembled {
+  // Unique event identifier (for deduplication)
+  string event_uuid = 1;
+  // Assembled order UUID
+  string order_uuid = 2;
+  // UUID of the user who placed the order
+  string user_uuid = 3;
+  // How long the assembly took, in seconds
+  int64 build_time_sec = 4;
+}

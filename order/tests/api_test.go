@@ -76,7 +76,14 @@ var (
 	paymentClient   paymentv1.PaymentServiceClient
 	httpClient      = &http.Client{Timeout: 5 * time.Second}
 	ts              *httptest.Server
+
+	// orderSvc is exposed so tests can drive transitions that, outside this
+	// suite, arrive over Kafka (e.g. MarkAssembled on ShipAssembled).
+	orderSvc *orderService.Service
 )
+
+// TestUserUUID is the default user_uuid createOrder sends when a test doesn't set one.
+const TestUserUUID = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
 
 func invBufDialer(context.Context, string) (net.Conn, error) {
 	return invLis.Dial()
@@ -102,7 +109,7 @@ func TestMain(m *testing.M) {
 	invLis = bufconn.Listen(bufSize)
 	invGRPCServer := grpc.NewServer()
 	invRepo := inventoryRepository.NewMemoryRepository()
-	invSvc := inventoryService.NewService(invRepo, inventoryDomain.NewCompatibilityChecker())
+	invSvc := inventoryService.NewService(invRepo, inventoryDomain.NewCompatibilityChecker(), inventoryService.NewNoopTrManager())
 	inventoryv1.RegisterInventoryServiceServer(invGRPCServer, inventoryAPI.NewServer(invSvc))
 	go func() {
 		if invServeErr := invGRPCServer.Serve(invLis); invServeErr != nil {
@@ -147,7 +154,10 @@ func TestMain(m *testing.M) {
 
 	// 3. Order HTTP via httptest
 	orderRepo := orderRepository.NewMemoryRepository()
-	orderSvc := orderService.NewService(inventoryClient, paymentClient, orderRepo, orderService.NewNoopTrManager())
+	orderSvc = orderService.NewService(
+		inventoryClient, paymentClient, orderRepo,
+		orderService.NewNoopTrManager(), orderService.NewNoopOrderPaidPublisher(),
+	)
 	h := orderAPI.NewHandler(orderSvc)
 	orderServer, err := orderAPI.SetupServer(h)
 	if err != nil {
@@ -170,6 +180,7 @@ func TestMain(m *testing.M) {
 
 // CreateOrderRequest represents the request body for creating an order
 type CreateOrderRequest struct {
+	UserUUID   string  `json:"user_uuid"`
 	HullUUID   string  `json:"hull_uuid"`
 	EngineUUID string  `json:"engine_uuid"`
 	ShieldUUID *string `json:"shield_uuid,omitempty"`
@@ -198,6 +209,7 @@ type CancelOrderResponse struct{}
 // OrderDTO represents an order in the API response
 type OrderDTO struct {
 	OrderUUID       string  `json:"order_uuid"`
+	UserUUID        string  `json:"user_uuid"`
 	HullUUID        string  `json:"hull_uuid"`
 	EngineUUID      string  `json:"engine_uuid"`
 	ShieldUUID      *string `json:"shield_uuid"`
@@ -219,6 +231,10 @@ type ErrorResponse struct {
 
 func createOrder(t *testing.T, req *CreateOrderRequest) (*CreateOrderResponse, *http.Response) {
 	t.Helper()
+
+	if req.UserUUID == "" {
+		req.UserUUID = TestUserUUID
+	}
 
 	jsonBody, err := json.Marshal(req)
 	require.NoError(t, err)
@@ -1395,4 +1411,85 @@ func TestInventory_ListParts_ByUuids_EmptyList(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Len(t, resp.GetParts(), 7)
+}
+
+// user_uuid tests
+
+func TestOrder_Create_MissingUserUUID(t *testing.T) {
+	body := `{"hull_uuid": "` + HullAluminumUUID + `", "engine_uuid": "` + EngineIonCUUID + `"}`
+	httpReq, err := http.NewRequest(http.MethodPost, orderBaseURL()+"/api/v1/orders", bytes.NewReader([]byte(body)))
+	require.NoError(t, err)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(httpReq)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestOrder_Get_ReturnsUserUUID(t *testing.T) {
+	userUUID := uuid.NewString()
+	createResult, createResp := createOrder(t, &CreateOrderRequest{
+		UserUUID:   userUUID,
+		HullUUID:   HullAluminumUUID,
+		EngineUUID: EngineIonCUUID,
+	})
+	defer func() { _ = createResp.Body.Close() }()
+	require.NotNil(t, createResult)
+
+	order, resp := getOrder(t, createResult.OrderUUID)
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, userUUID, order.UserUUID)
+}
+
+// ASSEMBLED tests. Outside this suite the transition is driven by a
+// ShipAssembled Kafka event; here the service method is called directly.
+
+func stockOf(t *testing.T, partUUID string) int64 {
+	t.Helper()
+
+	resp, err := inventoryClient.GetPart(context.Background(), &inventoryv1.GetPartRequest{Uuid: partUUID})
+	require.NoError(t, err)
+
+	return resp.GetPart().GetStockQuantity()
+}
+
+func TestOrder_Assembled_CommitsPartsAndBlocksCancelAndPay(t *testing.T) {
+	createResult, createResp := createOrder(t, &CreateOrderRequest{
+		HullUUID:   HullTitaniumUUID,
+		EngineUUID: EngineIonBUUID,
+	})
+	defer func() { _ = createResp.Body.Close() }()
+	require.NotNil(t, createResult)
+
+	_, payResp := payOrder(t, createResult.OrderUUID, &PayOrderRequest{PaymentMethod: "CARD"})
+	defer func() { _ = payResp.Body.Close() }()
+	require.Equal(t, http.StatusOK, payResp.StatusCode)
+
+	hullStockBefore := stockOf(t, HullTitaniumUUID)
+	engineStockBefore := stockOf(t, EngineIonBUUID)
+
+	require.NoError(t, orderSvc.MarkAssembled(context.Background(), uuid.MustParse(createResult.OrderUUID)))
+
+	order, getResp := getOrder(t, createResult.OrderUUID)
+	defer func() { _ = getResp.Body.Close() }()
+	require.Equal(t, "ASSEMBLED", order.Status)
+
+	assert.Equal(t, hullStockBefore-1, stockOf(t, HullTitaniumUUID), "hull should be written off")
+	assert.Equal(t, engineStockBefore-1, stockOf(t, EngineIonBUUID), "engine should be written off")
+
+	// A redelivered ShipAssembled must not write the parts off twice.
+	require.NoError(t, orderSvc.MarkAssembled(context.Background(), uuid.MustParse(createResult.OrderUUID)))
+	assert.Equal(t, hullStockBefore-1, stockOf(t, HullTitaniumUUID))
+
+	_, cancelResp := cancelOrder(t, createResult.OrderUUID)
+	defer func() { _ = cancelResp.Body.Close() }()
+	assert.Equal(t, http.StatusConflict, cancelResp.StatusCode)
+
+	_, repayResp := payOrder(t, createResult.OrderUUID, &PayOrderRequest{PaymentMethod: "CARD"})
+	defer func() { _ = repayResp.Body.Close() }()
+	assert.Equal(t, http.StatusConflict, repayResp.StatusCode)
 }

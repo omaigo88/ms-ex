@@ -42,3 +42,9 @@ func (r *memoryRepository) Get(_ context.Context, id uuid.UUID) (Order, error) {
 
 	return order, nil
 }
+
+// GetForUpdate is Get: the in-memory repository has no transactions to hold a
+// lock for (its mutex already serializes each call).
+func (r *memoryRepository) GetForUpdate(ctx context.Context, id uuid.UUID) (Order, error) {
+	return r.Get(ctx, id)
+}

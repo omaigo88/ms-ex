@@ -105,3 +105,20 @@ func (p *Part) Release(qty int64) error {
 
 	return nil
 }
+
+// Commit finalizes qty previously-reserved units: they leave the warehouse,
+// so both the reservation and the stock quantity go down.
+func (p *Part) Commit(qty int64) error {
+	if qty <= 0 {
+		return ErrInvalidQuantity
+	}
+
+	if p.reserved < qty {
+		return fmt.Errorf("%w: part %s", ErrReservationUnderflow, p.id)
+	}
+
+	p.reserved -= qty
+	p.stockQuantity -= qty
+
+	return nil
+}

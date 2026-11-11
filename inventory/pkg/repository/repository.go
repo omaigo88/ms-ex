@@ -31,7 +31,10 @@ type PartRecord struct {
 // Repository provides access to the parts catalog.
 type Repository interface {
 	GetPart(ctx context.Context, id uuid.UUID) (domain.Part, error)
+	// GetPartForUpdate is GetPart plus a row lock held until the surrounding
+	// transaction ends (SELECT ... FOR UPDATE).
+	GetPartForUpdate(ctx context.Context, id uuid.UUID) (domain.Part, error)
 	ListParts(ctx context.Context) ([]domain.Part, error)
-	// Save persists a part's mutable state (its Reserved count).
+	// Save persists a part's mutable state (reserved and stock quantity).
 	Save(ctx context.Context, part domain.Part) error
 }
