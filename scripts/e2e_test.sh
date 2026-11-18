@@ -1,10 +1,11 @@
 #!/bin/bash
 #
 # End-to-end smoke test: brings up the real Docker stack (Order, Inventory,
-# Payment, Assembly, Order/Inventory's Postgres instances and Kafka, via the
-# single deploy/compose/docker-compose.yaml), applies migrations, and drives
-# the Order HTTP API with curl — including the async Kafka chain that takes a
-# paid order to ASSEMBLED.
+# Payment, Assembly, IAM, their Postgres instances, Redis and Kafka, via the
+# single deploy/compose/docker-compose.yaml), applies migrations, registers and
+# logs in a user through IAM (grpcurl), and drives the Order HTTP API with
+# curl as that user — including the async Kafka chain that takes a paid order
+# to ASSEMBLED.
 #
 # Usage: scripts/e2e_test.sh
 # (also wired up as `task test:e2e`)
@@ -13,6 +14,8 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_URL="http://localhost:8080"
+COMPOSE_NETWORK="ms-ex_default"
+GRPCURL_IMAGE="fullstorydev/grpcurl:v1.9.3"
 
 FAILURES=0
 STACK_UP=0
@@ -26,7 +29,13 @@ ENGINE_ION_B=550e8400-e29b-41d4-a716-446655440004
 SHIELD_ENERGY=550e8400-e29b-41d4-a716-446655440005
 HULL_OUT_OF_STOCK=550e8400-e29b-41d4-a716-446655440007
 RANDOM_UUID=00000000-0000-4000-8000-000000000000
-USER_UUID=7c9e6679-7425-40de-944b-e07fc1f90ae7
+
+LOGIN="e2e-user-$(date +%s)"
+PASSWORD="e2e-password"
+
+# Authorization header value sent by assert_status/curl_auth; set after login.
+# Prefix a call with `AUTH=` (or a bogus value) to send no / another token.
+AUTH=""
 
 cleanup() {
 	echo
@@ -36,6 +45,11 @@ cleanup() {
 	fi
 }
 trap cleanup EXIT
+
+fail() {
+	echo "FAIL: $*"
+	FAILURES=$((FAILURES + 1))
+}
 
 wait_for_port() {
 	local port="$1" name="$2"
@@ -52,29 +66,45 @@ wait_for_port() {
 	return 1
 }
 
+# grpc ADDRESS METHOD JSON [extra grpcurl args...] — calls a service on the
+# compose network via a throwaway grpcurl container (uses server reflection).
+# Prints the response (or grpcurl's error, which includes the status code).
+grpc() {
+	local addr="$1" method="$2" data="$3"
+	shift 3
+	docker run --rm --network "$COMPOSE_NETWORK" "$GRPCURL_IMAGE" -plaintext "$@" -d "$data" "$addr" "$method" 2>&1
+}
+
+# curl_auth ARGS... — curl with the current AUTH header (if any).
+curl_auth() {
+	if [ -n "$AUTH" ]; then
+		curl -s -H "Authorization: $AUTH" "$@"
+	else
+		curl -s "$@"
+	fi
+}
+
 # assert_status METHOD PATH BODY EXPECTED_STATUS [EXPECTED_BODY_SUBSTRING]
 assert_status() {
 	local method="$1" path="$2" body="$3" expected="$4" want_substr="${5:-}"
 	local resp status actual_body
 
 	if [ -n "$body" ]; then
-		resp=$(curl -s -w '\n%{http_code}' -X "$method" "$BASE_URL$path" -H 'Content-Type: application/json' -d "$body")
+		resp=$(curl_auth -w '\n%{http_code}' -X "$method" "$BASE_URL$path" -H 'Content-Type: application/json' -d "$body")
 	else
-		resp=$(curl -s -w '\n%{http_code}' -X "$method" "$BASE_URL$path")
+		resp=$(curl_auth -w '\n%{http_code}' -X "$method" "$BASE_URL$path")
 	fi
 
 	status=$(echo "$resp" | tail -n1)
 	actual_body=$(echo "$resp" | sed '$d')
 
 	if [ "$status" != "$expected" ]; then
-		echo "FAIL: $method $path -> expected HTTP $expected, got $status (body: $actual_body)"
-		FAILURES=$((FAILURES + 1))
+		fail "$method $path -> expected HTTP $expected, got $status (body: $actual_body)"
 		return 1
 	fi
 
 	if [ -n "$want_substr" ] && [[ "$actual_body" != *"$want_substr"* ]]; then
-		echo "FAIL: $method $path -> expected body to contain '$want_substr', got: $actual_body"
-		FAILURES=$((FAILURES + 1))
+		fail "$method $path -> expected body to contain '$want_substr', got: $actual_body"
 		return 1
 	fi
 
@@ -82,10 +112,20 @@ assert_status() {
 	LAST_BODY="$actual_body"
 }
 
-echo "==> Starting the infrastructure (Order, Inventory, Payment, Assembly, Postgres, Kafka)..."
+# assert_contains DESCRIPTION HAYSTACK NEEDLE
+assert_contains() {
+	if [[ "$2" == *"$3"* ]]; then
+		echo "PASS: $1"
+	else
+		fail "$1 -> expected '$3' in: $2"
+	fi
+}
+
+echo "==> Starting the infrastructure (Order, Inventory, Payment, Assembly, IAM, Postgres, Redis, Kafka)..."
 task -d "$REPO_ROOT" up || exit 1
 STACK_UP=1
 
+wait_for_port 50053 IAMService || exit 1
 wait_for_port 50051 InventoryService || exit 1
 wait_for_port 50052 PaymentService || exit 1
 wait_for_port 8080 OrderService || exit 1
@@ -93,20 +133,64 @@ wait_for_port 8080 OrderService || exit 1
 echo "==> Applying migrations..."
 task -d "$REPO_ROOT" migrate:inventory:up || exit 1
 task -d "$REPO_ROOT" migrate:order:up || exit 1
+task -d "$REPO_ROOT" migrate:iam:up || exit 1
 
 echo
 echo "==> Running e2e scenarios..."
 
-# 1-4: create -> get (pending) -> pay -> get (paid)
-assert_status POST /api/v1/orders "{\"user_uuid\":\"$USER_UUID\",\"hull_uuid\":\"$HULL_ALUMINUM\",\"engine_uuid\":\"$ENGINE_ION_C\"}" 201 '"total_price":800000'
+# A1-A2: register and log in through IAM (gRPC)
+resp=$(grpc iam:50053 auth.v1.AuthService/Register "{\"login\":\"$LOGIN\",\"password\":\"$PASSWORD\"}")
+USER_UUID=$(echo "$resp" | jq -r '.userUuid // empty' 2>/dev/null)
+if [ -n "$USER_UUID" ]; then echo "PASS: IAM Register -> user $USER_UUID"; else fail "IAM Register: $resp"; exit 1; fi
+
+resp=$(grpc iam:50053 auth.v1.AuthService/Login "{\"login\":\"$LOGIN\",\"password\":\"$PASSWORD\"}")
+SESSION=$(echo "$resp" | jq -r '.sessionUuid // empty' 2>/dev/null)
+if [ -n "$SESSION" ]; then echo "PASS: IAM Login -> session issued"; else fail "IAM Login: $resp"; exit 1; fi
+AUTH="Bearer $SESSION"
+
+# A3-A6: IAM error cases, Whoami and GetUser. (Request bodies go through
+# variables: a JSON object with a comma inside "$(...)" would be brace-expanded.)
+duplicate_body="{\"login\":\"$LOGIN\",\"password\":\"other\"}"
+wrong_password_body="{\"login\":\"$LOGIN\",\"password\":\"wrong\"}"
+assert_contains "IAM Register duplicate login -> AlreadyExists" \
+	"$(grpc iam:50053 auth.v1.AuthService/Register "$duplicate_body")" "AlreadyExists"
+assert_contains "IAM Login wrong password -> Unauthenticated" \
+	"$(grpc iam:50053 auth.v1.AuthService/Login "$wrong_password_body")" "Unauthenticated"
+assert_contains "IAM Whoami -> session's user" \
+	"$(grpc iam:50053 auth.v1.AuthService/Whoami "{\"session_uuid\":\"$SESSION\"}")" "$USER_UUID"
+assert_contains "IAM GetUser -> login" \
+	"$(grpc iam:50053 user.v1.UserService/GetUser "{\"user_uuid\":\"$USER_UUID\"}")" "$LOGIN"
+
+# A7: the session lives in Redis as a hash with a TTL of at most 24h
+ttl=$(docker exec ms-ex-redis-1 redis-cli TTL "session:$SESSION" | tr -d '\r')
+stored_user=$(docker exec ms-ex-redis-1 redis-cli HGET "session:$SESSION" user_uuid | tr -d '\r')
+if [ "$ttl" -gt 0 ] 2>/dev/null && [ "$ttl" -le 86400 ] && [ "$stored_user" = "$USER_UUID" ]; then
+	echo "PASS: Redis session:{uuid} hash holds the user, TTL ${ttl}s"
+else
+	fail "Redis session -> TTL '$ttl', user_uuid '$stored_user'"
+fi
+
+# A8-A9: Inventory authenticates from incoming gRPC metadata
+assert_contains "Inventory ListParts without session -> Unauthenticated" \
+	"$(grpc inventory:50051 inventory.v1.InventoryService/ListParts '{}')" "Unauthenticated"
+assert_contains "Inventory ListParts with session-uuid metadata -> parts" \
+	"$(grpc inventory:50051 inventory.v1.InventoryService/ListParts '{}' -H "session-uuid: $SESSION")" "Aluminum Hull"
+
+# A10-A11: Order rejects requests without a valid session (401)
+AUTH="" assert_status POST /api/v1/orders "{\"hull_uuid\":\"$HULL_ALUMINUM\",\"engine_uuid\":\"$ENGINE_ION_C\"}" 401 '"code":401'
+AUTH="Bearer $RANDOM_UUID" assert_status GET "/api/v1/orders/$RANDOM_UUID" "" 401 '"code":401'
+
+# 1-4: create -> get (pending, owned by the session's user) -> pay -> get (paid)
+assert_status POST /api/v1/orders "{\"hull_uuid\":\"$HULL_ALUMINUM\",\"engine_uuid\":\"$ENGINE_ION_C\"}" 201 '"total_price":800000'
 ORDER1=$(echo "$LAST_BODY" | jq -r .order_uuid)
 
-assert_status GET "/api/v1/orders/$ORDER1" "" 200 '"status":"PENDING_PAYMENT"'
+assert_status GET "/api/v1/orders/$ORDER1" "" 200 "\"user_uuid\":\"$USER_UUID\""
+assert_contains "ORDER1 is PENDING_PAYMENT" "$LAST_BODY" '"status":"PENDING_PAYMENT"'
 assert_status POST "/api/v1/orders/$ORDER1/pay" '{"payment_method":"CARD"}' 200
 assert_status GET "/api/v1/orders/$ORDER1" "" 200 '"status":"PAID"'
 
 # 5-7: create -> cancel -> get (cancelled)
-assert_status POST /api/v1/orders "{\"user_uuid\":\"$USER_UUID\",\"hull_uuid\":\"$HULL_TITANIUM\",\"engine_uuid\":\"$ENGINE_ION_B\",\"shield_uuid\":\"$SHIELD_ENERGY\"}" 201 '"total_price":2700000'
+assert_status POST /api/v1/orders "{\"hull_uuid\":\"$HULL_TITANIUM\",\"engine_uuid\":\"$ENGINE_ION_B\",\"shield_uuid\":\"$SHIELD_ENERGY\"}" 201 '"total_price":2700000'
 ORDER2=$(echo "$LAST_BODY" | jq -r .order_uuid)
 
 assert_status POST "/api/v1/orders/$ORDER2/cancel" "" 200
@@ -119,23 +203,26 @@ assert_status POST "/api/v1/orders/$ORDER1/pay" '{"payment_method":"CARD"}' 409
 assert_status POST "/api/v1/orders/$ORDER2/pay" '{"payment_method":"CARD"}' 409 'order is cancelled'
 assert_status POST "/api/v1/orders/$ORDER1/cancel" "" 409
 
-# 12-13: inventory-driven errors
-assert_status POST /api/v1/orders "{\"user_uuid\":\"$USER_UUID\",\"hull_uuid\":\"$RANDOM_UUID\",\"engine_uuid\":\"$ENGINE_ION_C\"}" 404 'component not found'
-assert_status POST /api/v1/orders "{\"user_uuid\":\"$USER_UUID\",\"hull_uuid\":\"$HULL_OUT_OF_STOCK\",\"engine_uuid\":\"$ENGINE_ION_C\"}" 409 'component out of stock'
+# 12-13: inventory-driven errors (Order forwards the session to Inventory)
+assert_status POST /api/v1/orders "{\"hull_uuid\":\"$RANDOM_UUID\",\"engine_uuid\":\"$ENGINE_ION_C\"}" 404 'component not found'
+assert_status POST /api/v1/orders "{\"hull_uuid\":\"$HULL_OUT_OF_STOCK\",\"engine_uuid\":\"$ENGINE_ION_C\"}" 409 'component out of stock'
 
 # 14-16: request validation (ogen)
 assert_status POST /api/v1/orders '{}' 400
 assert_status GET /api/v1/orders/not-a-uuid "" 400
 assert_status POST "/api/v1/orders/$ORDER1/pay" '{"payment_method":"BITCOIN"}' 400
 
-# 17: missing user_uuid is rejected
-assert_status POST /api/v1/orders "{\"hull_uuid\":\"$HULL_ALUMINUM\",\"engine_uuid\":\"$ENGINE_ION_C\"}" 400
+# 17: a user_uuid in the body is ignored — the order belongs to the session's user
+assert_status POST /api/v1/orders "{\"user_uuid\":\"$RANDOM_UUID\",\"hull_uuid\":\"$HULL_ALUMINUM\",\"engine_uuid\":\"$ENGINE_ION_C\"}" 201
+ORDER3=$(echo "$LAST_BODY" | jq -r .order_uuid)
+assert_status GET "/api/v1/orders/$ORDER3" "" 200 "\"user_uuid\":\"$USER_UUID\""
 
-# 18: Kafka chain — OrderPaid -> AssemblyService -> ShipAssembled -> ASSEMBLED
+# 18: Kafka chain — OrderPaid -> AssemblyService -> ShipAssembled -> ASSEMBLED.
+# The ShipAssembled consumer has no user session; CommitParts is exempt from auth.
 # (assembly takes 5-15s, so allow up to 45s)
 assembled=0
 for _ in $(seq 1 90); do
-	if curl -s "$BASE_URL/api/v1/orders/$ORDER1" | grep -q '"status":"ASSEMBLED"'; then
+	if curl_auth "$BASE_URL/api/v1/orders/$ORDER1" | grep -q '"status":"ASSEMBLED"'; then
 		assembled=1
 		break
 	fi
@@ -144,20 +231,19 @@ done
 if [ "$assembled" -eq 1 ]; then
 	echo "PASS: ORDER1 reached ASSEMBLED via Kafka"
 else
-	echo "FAIL: ORDER1 never reached ASSEMBLED (last: $(curl -s "$BASE_URL/api/v1/orders/$ORDER1"))"
-	FAILURES=$((FAILURES + 1))
+	fail "ORDER1 never reached ASSEMBLED (last: $(curl_auth "$BASE_URL/api/v1/orders/$ORDER1"))"
 fi
 assert_status POST "/api/v1/orders/$ORDER1/cancel" "" 409 'order is already assembled'
 
-# 19: CommitParts wrote ORDER1's parts off — stock down by one, nothing left reserved
+# 19: CommitParts wrote ORDER1's parts off. ORDER3 (same parts) is still
+# reserved, so stock is down by one and one unit stays reserved.
 for part in "$HULL_ALUMINUM" "$ENGINE_ION_C"; do
 	row=$(docker exec ms-ex-inventory-postgres-1 psql -U inventory -d inventory -tA \
 		-c "SELECT stock_quantity || ',' || reserved FROM parts WHERE uuid = '$part'")
-	if [ "$row" = "99999,0" ]; then
+	if [ "$row" = "99999,1" ]; then
 		echo "PASS: part $part committed (stock,reserved = $row)"
 	else
-		echo "FAIL: part $part expected stock,reserved = 99999,0, got $row"
-		FAILURES=$((FAILURES + 1))
+		fail "part $part expected stock,reserved = 99999,1, got $row"
 	fi
 done
 
@@ -171,14 +257,19 @@ done
 if [ "$ui_status" = "200" ]; then
 	echo "PASS: Kafka UI on localhost:8090 -> 200"
 else
-	echo "FAIL: Kafka UI on localhost:8090 -> $ui_status"
-	FAILURES=$((FAILURES + 1))
+	fail "Kafka UI on localhost:8090 -> $ui_status"
 fi
 
-# 21: data survives a container restart (real Postgres persistence)
+# 21: data survives an Order restart (Postgres), and so does the session (Redis)
 docker restart ms-ex-order-1 >/dev/null 2>&1
 wait_for_port 8080 OrderService || exit 1
 assert_status GET "/api/v1/orders/$ORDER1" "" 200 '"status":"ASSEMBLED"'
+
+# 22: logout deletes the session — the same token is rejected afterwards
+grpc iam:50053 auth.v1.AuthService/Logout "{\"session_uuid\":\"$SESSION\"}" >/dev/null
+exists=$(docker exec ms-ex-redis-1 redis-cli EXISTS "session:$SESSION" | tr -d '\r')
+if [ "$exists" = "0" ]; then echo "PASS: Logout removed session:{uuid} from Redis"; else fail "session still in Redis after Logout"; fi
+assert_status GET "/api/v1/orders/$ORDER1" "" 401 '"code":401'
 
 echo
 if [ "$FAILURES" -eq 0 ]; then

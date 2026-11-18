@@ -17,8 +17,9 @@ paths:
 - Services that need Kafka `depends_on: kafka-init: service_completed_successfully`;
   services that need Postgres depend on its healthcheck.
 - Every Dockerfile builds from the repo root in workspace mode and must
-  `COPY` **every** module's `go.mod`/`go.sum` (`order inventory payment assembly shared`)
-  before `go mod download`. Runtime image: alpine, non-root `appuser`.
+  `COPY` **every** module's `go.mod`/`go.sum`
+  (`order inventory payment assembly iam shared`) before `go mod download`.
+  Runtime image: alpine, non-root `appuser`.
 - Tool versions are pinned in `Taskfile.yaml` vars and installed into `./bin`
   (`task setup`); never use globally installed linters/generators.
 - Modules are listed in several places that must stay in sync: `go.work`,
@@ -26,7 +27,11 @@ paths:
   test:coverage, coverage merge), every Dockerfile, `.mockery.yaml`.
 - After dependency changes run `go mod tidy` in each touched module
   (`GOWORK=off go mod tidy -diff` must be empty); gopls reports untidy modules
-  even when the workspace builds.
+  even when the workspace builds. `go work sync` can drop `go.sum` lines, so
+  always re-run tidy (and `-diff`) **after** `go work sync`, never before only.
+- When adding a dependency to one module, pin shared transitive deps (pgx,
+  `golang.org/x/*`) to the versions the other modules already use — the
+  workspace build list otherwise silently upgrades every module.
 - CI (`.github/workflows/ci.yml`) calls the same `task` targets as local runs —
   add new checks as tasks first, then call them from CI; never duplicate
   commands inline. Jobs: `lint` (build, golangci-lint, proto lint, format
@@ -34,5 +39,8 @@ paths:
   (`test:coverage`), `api-tests`. The `CI passed` job aggregates them and is
   the only required check in the ruleset — add a new job to its `needs`, don't
   rename it. A new module also goes into the tidy loop there.
-- Ports: Order 8080, Inventory 50051, Payment 50052, order-postgres 5432,
-  inventory-postgres 5433, Kafka 9094 (host) / 9092 (in-network), Kafka UI 8090.
+- Ports: Order 8080, Inventory 50051, Payment 50052, IAM 50053,
+  order-postgres 5432, inventory-postgres 5433, iam-postgres 5434, Redis 6379,
+  Kafka 9094 (host) / 9092 (in-network), Kafka UI 8090.
+- Compose env files: `order.env`, `inventory.env`, `iam.env` (all passed by
+  `task up/stop/down`); variables are service-prefixed so they can't collide.

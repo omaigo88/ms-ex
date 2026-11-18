@@ -1,12 +1,15 @@
-// Package tests contains the week 1 API tests.
+// Package tests contains the API tests.
 //
 // Layout: everything is spun up in-process within a single test binary.
-//   - Inventory and Payment (gRPC) are spun up via bufconn.Listener
+//   - IAM, Inventory and Payment (gRPC) are spun up via bufconn.Listener
 //     (a virtual transport with no network), clients reach them via
 //     grpc.NewClient with a custom dialer
 //   - Order (HTTP) is spun up via httptest.NewServer (a real TCP listener on
 //     127.0.0.1 with a random port); Order internally talks to Inventory/Payment
 //     through the same bufconn clients
+//   - Authentication is real: Order's HTTP middleware and Inventory's gRPC
+//     interceptor call IAM (in-memory users/sessions). TestMain registers and
+//     logs in a test user; httpClient sends its session as a Bearer token.
 //
 // This stack is started once in TestMain — no Docker, no hardcoded ports,
 // no task up. The tests are fast and self-contained.
@@ -30,8 +33,12 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 
+	iamAPI "github.com/omaigo88/iam/pkg/api"
+	iamRepository "github.com/omaigo88/iam/pkg/repository"
+	iamService "github.com/omaigo88/iam/pkg/service"
 	inventoryAPI "github.com/omaigo88/inventory/pkg/api"
 	inventoryDomain "github.com/omaigo88/inventory/pkg/domain"
 	inventoryRepository "github.com/omaigo88/inventory/pkg/repository"
@@ -42,6 +49,8 @@ import (
 	"github.com/omaigo88/order/tests/testutil"
 	paymentAPI "github.com/omaigo88/payment/pkg/api"
 	paymentService "github.com/omaigo88/payment/pkg/service"
+	"github.com/omaigo88/shared/pkg/auth"
+	authv1 "github.com/omaigo88/shared/pkg/proto/auth/v1"
 	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
 	paymentv1 "github.com/omaigo88/shared/pkg/proto/payment/v1"
 )
@@ -69,28 +78,93 @@ const (
 const bufSize = 1024 * 1024
 
 var (
+	iamLis *bufconn.Listener
 	invLis *bufconn.Listener
 	payLis *bufconn.Listener
 
+	authClient authv1.AuthServiceClient
+	// inventoryClient calls Inventory directly as the test user (session in
+	// outgoing metadata).
 	inventoryClient inventoryv1.InventoryServiceClient
-	paymentClient   paymentv1.PaymentServiceClient
-	httpClient      = &http.Client{Timeout: 5 * time.Second}
-	ts              *httptest.Server
+	// orderInventoryClient is the client Order itself uses: it forwards the
+	// session from ctx, so a call without one is unauthenticated.
+	orderInventoryClient inventoryv1.InventoryServiceClient
+	paymentClient        paymentv1.PaymentServiceClient
+
+	// testSession / testUserUUID belong to the user TestMain registers.
+	testSession  string
+	testUserUUID string
+
+	// httpClient authenticates as the test user; anonClient sends no token.
+	httpClient = &http.Client{Timeout: 5 * time.Second, Transport: bearerTransport{token: func() string { return testSession }}}
+	anonClient = &http.Client{Timeout: 5 * time.Second}
+	ts         *httptest.Server
 
 	// orderSvc is exposed so tests can drive transitions that, outside this
 	// suite, arrive over Kafka (e.g. MarkAssembled on ShipAssembled).
 	orderSvc *orderService.Service
 )
 
-// TestUserUUID is the default user_uuid createOrder sends when a test doesn't set one.
-const TestUserUUID = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
-
-func invBufDialer(context.Context, string) (net.Conn, error) {
-	return invLis.Dial()
+// bearerTransport adds "Authorization: Bearer <token>" unless the request
+// already carries an Authorization header.
+type bearerTransport struct {
+	token func() string
 }
 
-func payBufDialer(context.Context, string) (net.Conn, error) {
-	return payLis.Dial()
+func (b bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get("Authorization") == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("Authorization", "Bearer "+b.token())
+	}
+
+	return http.DefaultTransport.RoundTrip(req)
+}
+
+// sessionMetadataInterceptor attaches a fixed session to every outgoing call.
+func sessionMetadataInterceptor(session func() string) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		return invoker(metadata.AppendToOutgoingContext(ctx, auth.SessionMetadataKey, session()), method, req, reply, cc, opts...)
+	}
+}
+
+func bufClient(lis *bufconn.Listener, opts ...grpc.DialOption) *grpc.ClientConn {
+	opts = append(
+		opts,
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+
+	conn, err := grpc.NewClient("passthrough:///bufnet", opts...)
+	if err != nil {
+		slog.Error("bufconn gRPC client failed", "error", err)
+		os.Exit(1)
+	}
+
+	return conn
+}
+
+func serve(srv *grpc.Server, lis *bufconn.Listener, name string) {
+	go func() {
+		if err := srv.Serve(lis); err != nil {
+			slog.Error(name+" gRPC server failed", "error", err)
+			os.Exit(1)
+		}
+	}()
+}
+
+// registerAndLogin creates a user and returns its UUID and a fresh session.
+func registerAndLogin(ctx context.Context, login, password string) (userUUID, session string, err error) {
+	reg, err := authClient.Register(ctx, &authv1.RegisterRequest{Login: login, Password: password})
+	if err != nil {
+		return "", "", err
+	}
+
+	lr, err := authClient.Login(ctx, &authv1.LoginRequest{Login: login, Password: password})
+	if err != nil {
+		return "", "", err
+	}
+
+	return reg.GetUserUuid(), lr.GetSessionUuid(), nil
 }
 
 // orderBaseURL returns the base URL for order HTTP tests
@@ -105,57 +179,54 @@ func strPtr(s string) *string {
 
 // TestMain starts all services before the tests and stops them afterward
 func TestMain(m *testing.M) {
-	// 1. Inventory gRPC via bufconn
+	ctx := context.Background()
+
+	// 1. IAM gRPC via bufconn (in-memory users and sessions)
+	iamLis = bufconn.Listen(bufSize)
+	iamGRPCServer := grpc.NewServer()
+	iamSvc := iamService.NewService(iamRepository.NewUserMemoryRepository(), iamRepository.NewSessionMemoryRepository(), 24*time.Hour)
+	authv1.RegisterAuthServiceServer(iamGRPCServer, iamAPI.NewAuthServer(iamSvc))
+	serve(iamGRPCServer, iamLis, "iam")
+
+	iamConn := bufClient(iamLis)
+	authClient = authv1.NewAuthServiceClient(iamConn)
+
+	var err error
+
+	testUserUUID, testSession, err = registerAndLogin(ctx, "api-test-user", "api-test-password")
+	if err != nil {
+		slog.Error("register/login test user failed", "error", err)
+		os.Exit(1)
+	}
+
+	// 2. Inventory gRPC via bufconn, behind the IAM auth interceptor
 	invLis = bufconn.Listen(bufSize)
-	invGRPCServer := grpc.NewServer()
+	invGRPCServer := grpc.NewServer(grpc.UnaryInterceptor(inventoryAPI.AuthInterceptor(authClient)))
 	invRepo := inventoryRepository.NewMemoryRepository()
 	invSvc := inventoryService.NewService(invRepo, inventoryDomain.NewCompatibilityChecker(), inventoryService.NewNoopTrManager())
 	inventoryv1.RegisterInventoryServiceServer(invGRPCServer, inventoryAPI.NewServer(invSvc))
-	go func() {
-		if invServeErr := invGRPCServer.Serve(invLis); invServeErr != nil {
-			slog.Error("inventory gRPC server failed", "error", invServeErr)
-			os.Exit(1)
-		}
-	}()
+	serve(invGRPCServer, invLis, "inventory")
 
-	invConn, err := grpc.NewClient(
-		"passthrough:///bufnet",
-		grpc.WithContextDialer(invBufDialer),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		slog.Error("inventory gRPC client failed", "error", err)
-		os.Exit(1)
-	}
+	invConn := bufClient(invLis, grpc.WithUnaryInterceptor(sessionMetadataInterceptor(func() string { return testSession })))
 	inventoryClient = inventoryv1.NewInventoryServiceClient(invConn)
 
-	// 2. Payment gRPC via bufconn
+	orderInvConn := bufClient(invLis, grpc.WithUnaryInterceptor(auth.UnaryClientInterceptor()))
+	orderInventoryClient = inventoryv1.NewInventoryServiceClient(orderInvConn)
+
+	// 3. Payment gRPC via bufconn
 	payLis = bufconn.Listen(bufSize)
 	payGRPCServer := grpc.NewServer()
 	paySvc := paymentService.NewService()
 	paymentv1.RegisterPaymentServiceServer(payGRPCServer, paymentAPI.NewServer(paySvc))
-	go func() {
-		if payServeErr := payGRPCServer.Serve(payLis); payServeErr != nil {
-			slog.Error("payment gRPC server failed", "error", payServeErr)
-			os.Exit(1)
-		}
-	}()
+	serve(payGRPCServer, payLis, "payment")
 
-	payConn, err := grpc.NewClient(
-		"passthrough:///bufnet",
-		grpc.WithContextDialer(payBufDialer),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		slog.Error("payment gRPC client failed", "error", err)
-		os.Exit(1)
-	}
+	payConn := bufClient(payLis)
 	paymentClient = paymentv1.NewPaymentServiceClient(payConn)
 
-	// 3. Order HTTP via httptest
+	// 4. Order HTTP via httptest, behind the IAM auth middleware
 	orderRepo := orderRepository.NewMemoryRepository()
 	orderSvc = orderService.NewService(
-		inventoryClient, paymentClient, orderRepo,
+		orderInventoryClient, paymentClient, orderRepo,
 		orderService.NewNoopTrManager(), orderService.NewNoopOrderPaidPublisher(),
 	)
 	h := orderAPI.NewHandler(orderSvc)
@@ -164,15 +235,18 @@ func TestMain(m *testing.M) {
 		slog.Error("order HTTP server setup failed", "error", err)
 		os.Exit(1)
 	}
-	ts = httptest.NewServer(orderServer)
+	ts = httptest.NewServer(orderAPI.AuthMiddleware(authClient)(orderServer))
 
 	code := m.Run()
 
 	ts.Close()
 	_ = invConn.Close()
+	_ = orderInvConn.Close()
 	_ = payConn.Close()
+	_ = iamConn.Close()
 	invGRPCServer.Stop()
 	payGRPCServer.Stop()
+	iamGRPCServer.Stop()
 	os.Exit(code)
 }
 
@@ -180,7 +254,6 @@ func TestMain(m *testing.M) {
 
 // CreateOrderRequest represents the request body for creating an order
 type CreateOrderRequest struct {
-	UserUUID   string  `json:"user_uuid"`
 	HullUUID   string  `json:"hull_uuid"`
 	EngineUUID string  `json:"engine_uuid"`
 	ShieldUUID *string `json:"shield_uuid,omitempty"`
@@ -231,10 +304,6 @@ type ErrorResponse struct {
 
 func createOrder(t *testing.T, req *CreateOrderRequest) (*CreateOrderResponse, *http.Response) {
 	t.Helper()
-
-	if req.UserUUID == "" {
-		req.UserUUID = TestUserUUID
-	}
 
 	jsonBody, err := json.Marshal(req)
 	require.NoError(t, err)
@@ -1413,10 +1482,12 @@ func TestInventory_ListParts_ByUuids_EmptyList(t *testing.T) {
 	assert.Len(t, resp.GetParts(), 7)
 }
 
-// user_uuid tests
+// Authentication tests
 
-func TestOrder_Create_MissingUserUUID(t *testing.T) {
-	body := `{"hull_uuid": "` + HullAluminumUUID + `", "engine_uuid": "` + EngineIonCUUID + `"}`
+func TestOrder_Create_UserComesFromSession(t *testing.T) {
+	// A user_uuid in the body is not part of the request schema any more and
+	// must not override the session's user.
+	body := `{"user_uuid": "` + uuid.NewString() + `", "hull_uuid": "` + HullAluminumUUID + `", "engine_uuid": "` + EngineIonCUUID + `"}`
 	httpReq, err := http.NewRequest(http.MethodPost, orderBaseURL()+"/api/v1/orders", bytes.NewReader([]byte(body)))
 	require.NoError(t, err)
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -1424,29 +1495,141 @@ func TestOrder_Create_MissingUserUUID(t *testing.T) {
 	resp, err := httpClient.Do(httpReq)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	var created CreateOrderResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+
+	order, getResp := getOrder(t, created.OrderUUID)
+	defer func() { _ = getResp.Body.Close() }()
+	require.Equal(t, http.StatusOK, getResp.StatusCode)
+	assert.Equal(t, testUserUUID, order.UserUUID)
 }
 
-func TestOrder_Get_ReturnsUserUUID(t *testing.T) {
-	userUUID := uuid.NewString()
-	createResult, createResp := createOrder(t, &CreateOrderRequest{
-		UserUUID:   userUUID,
-		HullUUID:   HullAluminumUUID,
-		EngineUUID: EngineIonCUUID,
-	})
-	defer func() { _ = createResp.Body.Close() }()
-	require.NotNil(t, createResult)
+func TestOrder_Create_DifferentUsersOwnTheirOrders(t *testing.T) {
+	otherUser, otherSession, err := registerAndLogin(context.Background(), "other-"+uuid.NewString(), "pw")
+	require.NoError(t, err)
 
-	order, resp := getOrder(t, createResult.OrderUUID)
+	body := `{"hull_uuid": "` + HullAluminumUUID + `", "engine_uuid": "` + EngineIonCUUID + `"}`
+	httpReq, err := http.NewRequest(http.MethodPost, orderBaseURL()+"/api/v1/orders", bytes.NewReader([]byte(body)))
+	require.NoError(t, err)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+otherSession)
+
+	resp, err := httpClient.Do(httpReq)
+	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, userUUID, order.UserUUID)
+	var created CreateOrderResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&created))
+
+	order, getResp := getOrder(t, created.OrderUUID)
+	defer func() { _ = getResp.Body.Close() }()
+	assert.Equal(t, otherUser, order.UserUUID)
+}
+
+// unauthorizedRequests covers every Order endpoint.
+func unauthorizedRequests(t *testing.T) []*http.Request {
+	t.Helper()
+
+	id := uuid.NewString()
+	newReq := func(method, path, body string) *http.Request {
+		req, err := http.NewRequest(method, orderBaseURL()+path, bytes.NewReader([]byte(body)))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+
+		return req
+	}
+
+	return []*http.Request{
+		newReq(http.MethodPost, "/api/v1/orders", `{"hull_uuid": "`+HullAluminumUUID+`", "engine_uuid": "`+EngineIonCUUID+`"}`),
+		newReq(http.MethodGet, "/api/v1/orders/"+id, ""),
+		newReq(http.MethodPost, "/api/v1/orders/"+id+"/pay", `{"payment_method": "CARD"}`),
+		newReq(http.MethodPost, "/api/v1/orders/"+id+"/cancel", ""),
+	}
+}
+
+func assertUnauthorized(t *testing.T, resp *http.Response) {
+	t.Helper()
+
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+
+	var body ErrorResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	assert.Equal(t, http.StatusUnauthorized, body.Code)
+}
+
+func TestAuth_NoToken_Unauthorized(t *testing.T) {
+	for _, req := range unauthorizedRequests(t) {
+		t.Run(req.Method+" "+req.URL.Path, func(t *testing.T) {
+			resp, err := anonClient.Do(req)
+			require.NoError(t, err)
+			defer func() { _ = resp.Body.Close() }()
+
+			assertUnauthorized(t, resp)
+		})
+	}
+}
+
+func TestAuth_InvalidToken_Unauthorized(t *testing.T) {
+	for _, token := range []string{uuid.NewString(), "not-a-uuid"} {
+		t.Run(token, func(t *testing.T) {
+			req := unauthorizedRequests(t)[1]
+			req.Header.Set("Authorization", "Bearer "+token)
+
+			resp, err := anonClient.Do(req)
+			require.NoError(t, err)
+			defer func() { _ = resp.Body.Close() }()
+
+			assertUnauthorized(t, resp)
+		})
+	}
+}
+
+func TestAuth_LogoutRevokesSession(t *testing.T) {
+	_, session, err := registerAndLogin(context.Background(), "logout-"+uuid.NewString(), "pw")
+	require.NoError(t, err)
+
+	createWith := func() *http.Response {
+		req := unauthorizedRequests(t)[0]
+		req.Header.Set("Authorization", "Bearer "+session)
+
+		resp, doErr := anonClient.Do(req)
+		require.NoError(t, doErr)
+
+		return resp
+	}
+
+	resp := createWith()
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	_, err = authClient.Logout(context.Background(), &authv1.LogoutRequest{SessionUuid: session})
+	require.NoError(t, err)
+
+	resp = createWith()
+	defer func() { _ = resp.Body.Close() }()
+	assertUnauthorized(t, resp)
+}
+
+func TestAuth_InventoryRequiresSession(t *testing.T) {
+	// orderInventoryClient forwards only a session found on ctx; none here.
+	_, err := orderInventoryClient.ListParts(context.Background(), &inventoryv1.ListPartsRequest{})
+	testutil.AssertGRPCStatus(t, err, codes.Unauthenticated)
+
+	_, err = orderInventoryClient.ListParts(auth.WithSessionUUID(context.Background(), uuid.NewString()), &inventoryv1.ListPartsRequest{})
+	testutil.AssertGRPCStatus(t, err, codes.Unauthenticated)
+
+	resp, err := orderInventoryClient.ListParts(auth.WithSessionUUID(context.Background(), testSession), &inventoryv1.ListPartsRequest{})
+	require.NoError(t, err)
+	assert.NotEmpty(t, resp.GetParts())
 }
 
 // ASSEMBLED tests. Outside this suite the transition is driven by a
-// ShipAssembled Kafka event; here the service method is called directly.
+// ShipAssembled Kafka event; here the service method is called directly —
+// with no session on ctx, exactly like the Kafka consumer, which works
+// because Inventory exempts CommitParts from authentication.
 
 func stockOf(t *testing.T, partUUID string) int64 {
 	t.Helper()

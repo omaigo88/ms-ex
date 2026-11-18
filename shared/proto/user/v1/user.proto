@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package user.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/omaigo88/shared/pkg/proto/user/v1;userv1";
+
+// UserService exposes registered users.
+service UserService {
+  // GetUser returns a user by UUID.
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+}
+
+// User is a registered user (never includes the password hash)
+message User {
+  // Unique user identifier
+  string uuid = 1;
+  // Unique login
+  string login = 2;
+  // When the user registered
+  google.protobuf.Timestamp created_at = 3;
+}
+
+// Request to get a user by UUID
+message GetUserRequest {
+  // User UUID
+  string user_uuid = 1;
+}
+
+// Response for a get user request
+message GetUserResponse {
+  // The requested user
+  User user = 1;
+}

@@ -36,6 +36,7 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(container.AuthInterceptor),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			MaxConnectionIdle: 15 * time.Minute,
 			Time:              2 * time.Hour,

@@ -1,6 +1,6 @@
 # Single compose file for the whole infrastructure: Order, Inventory,
-# Payment, Assembly, Order/Inventory's own Postgres instances, and Kafka
-# (+ Kafka UI on localhost:8090). All services share
+# Payment, Assembly, IAM, the Postgres instances of Order/Inventory/IAM,
+# Redis (IAM sessions), and Kafka (+ Kafka UI on localhost:8090). All services share
 # the project's default network and reach each other by service name
 # (e.g. Order calls Inventory at "inventory:50051") — no external network or
 # host.docker.internal hack needed since everything lives in one project.
@@ -20,10 +20,13 @@ services:
       DB_URI: postgres://${ORDER_POSTGRES_USER}:${ORDER_POSTGRES_PASSWORD}@order-postgres:5432/${ORDER_POSTGRES_DB}?sslmode=disable
       INVENTORY_SERVICE_ADDRESS: ${INVENTORY_SERVICE_ADDRESS}
       PAYMENT_SERVICE_ADDRESS: ${PAYMENT_SERVICE_ADDRESS}
+      IAM_SERVICE_ADDRESS: iam:50053
       KAFKA_BROKERS: kafka:9092
     depends_on:
       order-postgres:
         condition: service_healthy
+      iam:
+        condition: service_started
       inventory:
         condition: service_started
       payment:
@@ -56,9 +59,12 @@ services:
     environment:
       # In-network DSN, see the note on order's DB_URI above.
       DB_URI: postgres://${INVENTORY_POSTGRES_USER}:${INVENTORY_POSTGRES_PASSWORD}@inventory-postgres:5432/${INVENTORY_POSTGRES_DB}?sslmode=disable
+      IAM_SERVICE_ADDRESS: iam:50053
     depends_on:
       inventory-postgres:
         condition: service_healthy
+      iam:
+        condition: service_started
 
   inventory-postgres:
     image: postgres:16-alpine
@@ -72,6 +78,51 @@ services:
       - inventory-postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${INVENTORY_POSTGRES_USER} -d ${INVENTORY_POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  iam:
+    build:
+      context: ../..
+      dockerfile: iam/Dockerfile
+    ports:
+      - "50053:50053"
+    environment:
+      # In-network DSN, see the note on order's DB_URI above.
+      DB_URI: postgres://${IAM_POSTGRES_USER}:${IAM_POSTGRES_PASSWORD}@iam-postgres:5432/${IAM_POSTGRES_DB}?sslmode=disable
+      REDIS_ADDRESS: redis:6379
+      IAM_SESSION_TTL: ${IAM_SESSION_TTL}
+    depends_on:
+      iam-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  iam-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${IAM_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${IAM_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${IAM_POSTGRES_DB}
+    ports:
+      - "${IAM_POSTGRES_PORT}:5432"
+    volumes:
+      - iam-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${IAM_POSTGRES_USER} -d ${IAM_POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # Session store for IAM only (no caching). Sessions are hashes with a TTL,
+  # so nothing needs to survive a restart beyond what the TTL allows.
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "${REDIS_PORT}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       timeout: 3s
       retries: 20
@@ -151,3 +202,4 @@ volumes:
   kafka-data:
   order-postgres-data:
   inventory-postgres-data:
+  iam-postgres-data:

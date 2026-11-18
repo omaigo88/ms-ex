@@ -1,6 +1,6 @@
 # ms-ex — "order a spaceship" microservices
 
-Go 1.26 workspace of four services plus a shared module. Read
+Go 1.26 workspace of five services plus a shared module. Read
 `docs/architecture.md` for diagrams; this file is the working contract.
 
 ## Services
@@ -11,12 +11,20 @@ Go 1.26 workspace of four services plus a shared module. Read
 | `inventory` | gRPC `:50051`             | parts catalog + stock (Postgres)       |
 | `payment`   | gRPC `:50052`             | payments (stateless)                   |
 | `assembly`  | Kafka only (no port)      | simulated ship assembly (stateless)    |
-| `shared`    | —                         | proto/OpenAPI contracts, generated code, `pkg/kafka` |
+| `iam`       | gRPC `:50053`             | users (Postgres, bcrypt) + sessions (Redis, 24 h TTL) |
+| `shared`    | —                         | proto/OpenAPI contracts, generated code, `pkg/kafka`, `pkg/auth` |
 
 Order flow: `POST /orders` (Inventory `ReserveParts`) → `POST /orders/{id}/pay`
 (Payment `PayOrder`, status `PAID`, publish `OrderPaid`) → AssemblyService
 (5–15 s) publishes `ShipAssembled` → Order calls Inventory `CommitParts` →
 status `ASSEMBLED`. Cancel only from `PENDING_PAYMENT` (Inventory `ReleaseParts`).
+
+Auth (session-based): client calls IAM `Register`/`Login` → `session_uuid` →
+sends `Authorization: Bearer <session_uuid>`. Order's HTTP middleware and
+Inventory's gRPC interceptor call IAM `Whoami` on every request (no caching);
+Order forwards the session to Inventory as outgoing metadata `session-uuid`;
+an order's `user_uuid` comes from the session. Missing/invalid session → HTTP
+401 / gRPC `Unauthenticated`. Inventory `CommitParts` is exempt (Kafka path).
 
 Statuses: `PENDING_PAYMENT`, `PAID`, `ASSEMBLED`, `CANCELLED`. Pay/Cancel on a
 non-pending order → `ErrOrderAlreadyPaid` / `ErrOrderCancelled` /
@@ -47,9 +55,9 @@ non-pending order → `ErrOrderAlreadyPaid` / `ErrOrderCancelled` /
 | `task test:api` | `order/tests` — HTTP API against in-memory wiring, no Docker |
 | `task test:coverage` | coverage, threshold 40% |
 | `task up` / `stop` / `down` | whole stack via `deploy/compose/docker-compose.yaml` (project `ms-ex`) |
-| `task migrate:{order,inventory}:{up,down,status}` | goose |
+| `task migrate:{order,inventory,iam}:{up,down,status}` | goose |
 | `task test:e2e` | `scripts/e2e_test.sh`: real stack + Kafka chain, tears down after |
-| `task run:{order,inventory,payment,assembly}` | run one service on the host |
+| `task run:{order,inventory,payment,assembly,iam}` | run one service on the host |
 
 Kafka UI: http://localhost:8090. Host Kafka listener: `localhost:9094`.
 
@@ -97,3 +105,6 @@ e2e — step 4 is on you before opening the PR.
   publish failure is logged only.
 - No cross-service saga/compensation.
 - Order holds a row lock across gRPC calls in Pay/Cancel/MarkAssembled.
+- No service-to-service auth: Inventory `CommitParts` skips the session check.
+- Authentication only — no roles/ownership checks; no Whoami caching, no
+  refresh tokens, fixed session TTL (all by design for this stage).

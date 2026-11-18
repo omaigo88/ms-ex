@@ -17,6 +17,14 @@ Dependency direction is strictly `cmd → internal/app → pkg/{api,kafka} → p
   - Inventory gRPC: invalid UUID → `InvalidArgument`, not found → `NotFound`,
     invariant violations (`ErrInsufficientStock`, `ErrIncompatibleParts`,
     `ErrReservationUnderflow`) → `FailedPrecondition`, else `Internal`.
+- **Authentication edge** lives in `pkg/api` too: Order's `AuthMiddleware`
+  (HTTP) and Inventory's `AuthInterceptor` (gRPC) call IAM `Whoami` and put
+  the session/user on `ctx` via `shared/pkg/auth`. Services read the user with
+  `auth.UserUUIDFromContext` in the handler and pass it explicitly into
+  service inputs — `pkg/service` never calls IAM. Order's outgoing calls to
+  Inventory forward the session via `auth.UnaryClientInterceptor()` (wired in
+  `internal/app`). A new RPC that must work without a user session (system
+  calls, e.g. from Kafka) needs an explicit entry in the interceptor's allowlist.
 - **`pkg/kafka`** — the async equivalent of `pkg/api`: decode the event, call the
   service, return its error. No business logic.
 - **`pkg/service`** — business rules and orchestration. Declares the interfaces

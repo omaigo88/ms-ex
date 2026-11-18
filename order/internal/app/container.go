@@ -1,11 +1,12 @@
 // Package app wires OrderService's dependency graph: repository,
 // transaction manager, gRPC clients, business logic, and the HTTP
-// transport adapter.
+// transport adapter behind the IAM authentication middleware.
 package app
 
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -20,8 +21,9 @@ import (
 	orderkafka "github.com/omaigo88/order/pkg/kafka"
 	"github.com/omaigo88/order/pkg/repository"
 	"github.com/omaigo88/order/pkg/service"
+	"github.com/omaigo88/shared/pkg/auth"
 	sharedkafka "github.com/omaigo88/shared/pkg/kafka"
-	orderv1 "github.com/omaigo88/shared/pkg/openapi/order/v1"
+	authv1 "github.com/omaigo88/shared/pkg/proto/auth/v1"
 	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
 	paymentv1 "github.com/omaigo88/shared/pkg/proto/payment/v1"
 )
@@ -29,6 +31,7 @@ import (
 const (
 	defaultInventoryServiceAddress = "localhost:50051"
 	defaultPaymentServiceAddress   = "localhost:50052"
+	defaultIAMServiceAddress       = "localhost:50053"
 	defaultKafkaBrokers            = "localhost:9094"
 
 	consumerGroupID = "order-service"
@@ -54,17 +57,18 @@ type Container struct {
 	// closers release resources in reverse acquisition order.
 	closers []func()
 
-	// Server is the ogen-generated OpenAPI HTTP handler, ready to pass to an http.Server.
-	Server *orderv1.Server
+	// Handler is the ogen-generated OpenAPI server wrapped in the IAM
+	// authentication middleware, ready to pass to an http.Server.
+	Handler http.Handler
 
 	consumer *sharedkafka.Consumer
 	service  *service.Service
 }
 
 // New builds a Container: connects to Postgres (DB_URI), to
-// InventoryService/PaymentService (INVENTORY_SERVICE_ADDRESS/
-// PAYMENT_SERVICE_ADDRESS, defaulting to localhost) and to Kafka
-// (KAFKA_BROKERS, defaulting to localhost:9094).
+// InventoryService/PaymentService/IAMService (INVENTORY_SERVICE_ADDRESS/
+// PAYMENT_SERVICE_ADDRESS/IAM_SERVICE_ADDRESS, defaulting to localhost) and
+// to Kafka (KAFKA_BROKERS, defaulting to localhost:9094).
 func New(ctx context.Context) (_ *Container, err error) {
 	c := &Container{}
 
@@ -81,7 +85,12 @@ func New(ctx context.Context) (_ *Container, err error) {
 
 	c.closers = append(c.closers, pool.Close)
 
-	inventoryConn, err := c.dial(getEnv("INVENTORY_SERVICE_ADDRESS", defaultInventoryServiceAddress))
+	// Inventory authenticates callers itself, so the session of the HTTP
+	// request is forwarded to it as outgoing gRPC metadata.
+	inventoryConn, err := c.dial(
+		getEnv("INVENTORY_SERVICE_ADDRESS", defaultInventoryServiceAddress),
+		grpc.WithUnaryInterceptor(auth.UnaryClientInterceptor()),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connect to InventoryService: %w", err)
 	}
@@ -89,6 +98,11 @@ func New(ctx context.Context) (_ *Container, err error) {
 	paymentConn, err := c.dial(getEnv("PAYMENT_SERVICE_ADDRESS", defaultPaymentServiceAddress))
 	if err != nil {
 		return nil, fmt.Errorf("connect to PaymentService: %w", err)
+	}
+
+	iamConn, err := c.dial(getEnv("IAM_SERVICE_ADDRESS", defaultIAMServiceAddress))
+	if err != nil {
+		return nil, fmt.Errorf("connect to IAMService: %w", err)
 	}
 
 	brokers := sharedkafka.ParseBrokers(getEnv("KAFKA_BROKERS", defaultKafkaBrokers))
@@ -115,16 +129,20 @@ func New(ctx context.Context) (_ *Container, err error) {
 		orderkafka.NewOrderPaidPublisher(producer),
 	)
 
-	c.Server, err = api.SetupServer(api.NewHandler(c.service))
+	server, err := api.SetupServer(api.NewHandler(c.service))
 	if err != nil {
 		return nil, fmt.Errorf("setup OpenAPI server: %w", err)
 	}
 
+	c.Handler = api.AuthMiddleware(authv1.NewAuthServiceClient(iamConn))(server)
+
 	return c, nil
 }
 
-func (c *Container) dial(addr string) (*grpc.ClientConn, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpcKeepaliveParams)
+func (c *Container) dial(addr string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()), grpcKeepaliveParams)
+
+	conn, err := grpc.NewClient(addr, opts...)
 	if err != nil {
 		return nil, err
 	}

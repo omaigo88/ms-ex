@@ -10,6 +10,7 @@ import (
 
 	"github.com/omaigo88/order/pkg/repository"
 	orderService "github.com/omaigo88/order/pkg/service"
+	"github.com/omaigo88/shared/pkg/auth"
 	orderv1 "github.com/omaigo88/shared/pkg/openapi/order/v1"
 )
 
@@ -103,8 +104,15 @@ func (h *Handler) GetOrder(ctx context.Context, params orderv1.GetOrderParams) (
 // CreateOrder implements the createOrder operation
 // POST /api/v1/orders.
 func (h *Handler) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest) (orderv1.CreateOrderRes, error) {
+	// The user always comes from the authenticated session (AuthMiddleware),
+	// never from the request body.
+	userUUID, ok := auth.UserUUIDFromContext(ctx)
+	if !ok {
+		return nil, errors.New("create order: no authenticated user in context")
+	}
+
 	input := orderService.CreateOrderInput{
-		UserUUID:   req.GetUserUUID(),
+		UserUUID:   userUUID,
 		HullUUID:   req.GetHullUUID(),
 		EngineUUID: req.GetEngineUUID(),
 	}
