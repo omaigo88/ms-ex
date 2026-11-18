@@ -24,11 +24,17 @@ Three levels; a change usually touches the first two, sometimes the third.
    - Cover: happy path, each sentinel error, idempotent redelivery for event handlers,
      "malformed message is dropped" for Kafka handlers.
 2. **API** (`task test:api`, `order/tests`) — real Order HTTP server, real
-   Inventory/Payment gRPC servers over in-memory repositories, no-op
-   `TrManager` and no-op publisher. No Docker, no Kafka. The async chain is
-   exercised by calling `orderSvc.MarkAssembled` directly.
+   IAM/Inventory/Payment gRPC servers over in-memory repositories, no-op
+   `TrManager` and no-op publisher. No Docker, no Kafka, no Redis. Auth is
+   real: `TestMain` registers and logs in a user; `httpClient` sends its
+   Bearer token, `anonClient` sends none; `inventoryClient` calls Inventory
+   with the session in metadata. The async chain is exercised by calling
+   `orderSvc.MarkAssembled` directly (no session, like the Kafka consumer).
 3. **E2E** (`task test:e2e`, `scripts/e2e_test.sh`) — full Docker stack, real
-   Postgres + Kafka, curl + jq + psql. Brings the stack up and tears it down.
+   Postgres + Redis + Kafka, curl + jq + psql + grpcurl (run as a container
+   on the compose network — no host install). Brings the stack up and tears it down.
+   - JSON bodies with commas go into variables before `"$(...)"` — inline they
+     get brace-expanded.
    - Async assertions poll with a timeout; never `sleep N` and hope.
    - Assert on status code always; on body substrings only when the message is a
      stable sentinel.

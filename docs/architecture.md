@@ -1,6 +1,6 @@
 # Architecture
 
-Four Go services build a toy "order a spaceship" system:
+Five Go services build a toy "order a spaceship" system:
 
 - **OrderService** — HTTP API (`:8080`), the only service a client talks to
   directly. Owns orders (PostgreSQL). Kafka producer of `OrderPaid`, consumer
@@ -10,16 +10,23 @@ Four Go services build a toy "order a spaceship" system:
 - **PaymentService** — gRPC (`:50052`), processes payments (stateless).
 - **AssemblyService** — no inbound port; Kafka consumer of `OrderPaid`,
   simulates building the ship (5–15 s) and produces `ShipAssembled` (stateless).
+- **IAMService** — gRPC (`:50053`), identity: users in PostgreSQL (bcrypt
+  password hashes), sessions in Redis (hash per session, 24 h TTL).
+  `AuthService` (Register, Login, Whoami, Logout) and `UserService` (GetUser).
+  Every Order HTTP request and every Inventory gRPC call is authenticated
+  against it.
 
 Contracts and shared plumbing live in the `shared` module: protobuf
 (`shared/proto` → `shared/pkg/proto`), the Order OpenAPI spec
-(`shared/api/order/v1` → `shared/pkg/openapi`, ogen), and the sarama wrapper
-`shared/pkg/kafka`.
+(`shared/api/order/v1` → `shared/pkg/openapi`, ogen), the sarama wrapper
+`shared/pkg/kafka`, and `shared/pkg/auth` (session/user context helpers and the
+gRPC client interceptor that forwards the session).
 
 Each service follows the same layering (`<service>/pkg/...`):
 
 - `api` — transport adapter (HTTP handler / gRPC server). Converts wire types
-  ⇄ service/domain types, maps errors to status codes.
+  ⇄ service/domain types, maps errors to status codes. Also hosts the
+  authentication edge: Order's HTTP middleware, Inventory's gRPC interceptor.
 - `kafka` (Order, Assembly) — the async counterpart of `api`: decodes events,
   calls the service, encodes outgoing events.
 - `service` — business logic. Depends only on narrow interfaces it declares
@@ -27,9 +34,10 @@ Each service follows the same layering (`<service>/pkg/...`):
   …), never on transport or Kafka types.
 - `domain` (Inventory) — the `Part` aggregate guards stock/reservation
   invariants (`Reserve`, `Release`, `Commit`).
-- `repository` — storage. Order and Inventory have a **PostgreSQL**
-  implementation (used in `cmd/main.go` and the Compose stack) and an
-  in-memory one used only by the self-contained API test suite (`order/tests`).
+- `repository` — storage. Order, Inventory and IAM (users) have a
+  **PostgreSQL** implementation, IAM sessions a **Redis** one (used in
+  `cmd/main.go` and the Compose stack); each also has an in-memory twin used
+  only by the self-contained API test suite (`order/tests`).
 
 `internal/app` in each service is the only place that reads env vars and
 builds concrete types.
@@ -69,6 +77,17 @@ flowchart TB
         PayAPI --> PaySvc
     end
 
+    subgraph IAMService["IAMService — gRPC :50053"]
+        direction TB
+        IAMAPI["api\n(AuthService, UserService)"]
+        IAMSvc["service\n(bcrypt, sessions)"]
+        IAMUsers[("repository\n(Postgres: users)")]
+        IAMSessions[("repository\n(Redis: session:{uuid})")]
+        IAMAPI --> IAMSvc
+        IAMSvc --> IAMUsers
+        IAMSvc --> IAMSessions
+    end
+
     subgraph AssemblyService["AssemblyService — Kafka only"]
         direction TB
         AsmKafka["kafka\n(OrderPaid handler)"]
@@ -78,7 +97,10 @@ flowchart TB
 
     Kafka{{"Kafka\norder.paid · ship.assembled"}}
 
-    Client -- "HTTP JSON" --> OrderAPI
+    Client -- "HTTP JSON\nAuthorization: Bearer session_uuid" --> OrderAPI
+    Client -- "gRPC Register / Login / Logout" --> IAMAPI
+    OrderAPI -- "gRPC Whoami\n(HTTP middleware)" --> IAMAPI
+    InvAPI -- "gRPC Whoami\n(interceptor)" --> IAMAPI
     OrderSvc -- "gRPC ListParts / ReserveParts /\nReleaseParts / CommitParts" --> InvAPI
     OrderSvc -- "gRPC PayOrder" --> PayAPI
     OrderKafka -- "produce OrderPaid" --> Kafka
@@ -88,9 +110,79 @@ flowchart TB
 ```
 
 `OrderService.service` is the orchestrator: it is the only place that calls
-the other services synchronously, and it reacts to the asynchronous
-`ShipAssembled` event. AssemblyService knows nothing about orders beyond the
-event payload.
+the other services synchronously for business operations, and it reacts to
+the asynchronous `ShipAssembled` event. AssemblyService knows nothing about
+orders beyond the event payload. IAM is called only from the authentication
+edges (Order middleware, Inventory interceptor) — never from business logic.
+
+## Authentication
+
+Session-based: `Login` returns an opaque `session_uuid`; the client sends it
+as `Authorization: Bearer <session_uuid>`. There is no JWT, refresh token,
+role or permission model — only "who is this?".
+
+```mermaid
+sequenceDiagram
+    actor Client
+    participant Order as OrderService
+    participant Inv as InventoryService
+    participant IAM as IAMService
+    participant R as Redis
+    participant PG as PostgreSQL (iam / order)
+
+    rect rgba(127,127,127,0.12)
+    Note over Client,PG: 1. Register and log in
+    Client->>IAM: Register(login, password)
+    IAM->>PG: INSERT INTO users (bcrypt hash)
+    IAM-->>Client: user_uuid
+    Client->>IAM: Login(login, password)
+    IAM->>PG: SELECT user by login
+    Note over IAM: bcrypt.CompareHashAndPassword
+    IAM->>R: HSET session:{uuid} + EXPIRE 24h (MULTI)
+    IAM-->>Client: session_uuid
+    end
+
+    rect rgba(127,127,127,0.12)
+    Note over Client,PG: 2. Authenticated request
+    Client->>Order: POST /api/v1/orders (Authorization: Bearer session_uuid)
+    Note over Order: HTTP middleware
+    Order->>IAM: Whoami(session_uuid)
+    IAM->>R: HGETALL session:{uuid}
+    IAM-->>Order: user_uuid, login
+    Note over Order: ctx = auth.WithSessionUUID + auth.WithUserUUID
+    Order->>Inv: ListParts / ReserveParts (outgoing metadata session-uuid)
+    Note over Inv: gRPC interceptor (incoming metadata)
+    Inv->>IAM: Whoami(session_uuid)
+    IAM->>R: HGETALL session:{uuid}
+    IAM-->>Inv: user_uuid, login
+    Inv-->>Order: parts / ok
+    Note over Order: order.UserUUID = user from ctx
+    Order->>PG: INSERT INTO orders (…, user_uuid)
+    Order-->>Client: 201 Created
+    end
+```
+
+- **Order HTTP middleware** (`order/pkg/api/auth.go`) wraps the whole ogen
+  server: missing/malformed header or a session IAM rejects → **401**
+  `{"code":401,"message":"unauthorized"}` before any handler runs; IAM
+  unreachable → 500. `CreateOrder` takes `user_uuid` from the context — the
+  request body no longer has that field.
+- **Incoming vs outgoing metadata.** gRPC never propagates a server's
+  *incoming* metadata to its own outgoing calls. Order keeps the session on
+  `ctx` (`auth.WithSessionUUID`), and its Inventory client's
+  `auth.UnaryClientInterceptor()` copies it into **outgoing** metadata
+  (`session-uuid`). Inventory's `AuthInterceptor` reads it from **incoming**
+  metadata. Payment is not authenticated, so its client has no interceptor.
+- **Inventory interceptor** (`inventory/pkg/api/auth.go`) authenticates every
+  unary RPC except `CommitParts`, which Order calls from its ShipAssembled
+  consumer — there is no user session on that path (see Known limitations).
+- **No caching:** both edges call `Whoami` on every request, so `Logout`
+  (`DEL session:{uuid}`) takes effect immediately. Sessions don't slide: the
+  TTL is set once at login (`IAM_SESSION_TTL`, default 24 h); after it
+  expires the user logs in again.
+- Unknown login and wrong password both return `Unauthenticated` ("invalid
+  login or password"); for an unknown login IAM still runs a bcrypt compare
+  against a dummy hash so both cases take the same time.
 
 ## Order lifecycle
 
@@ -189,7 +281,8 @@ sequenceDiagram
     participant Inv as InventoryService
     participant ODB as PostgreSQL (order)
 
-    Client->>Order: POST /api/v1/orders {user_uuid, hull_uuid, engine_uuid, shield_uuid?, weapon_uuid?}
+    Client->>Order: POST /api/v1/orders {hull_uuid, engine_uuid, shield_uuid?, weapon_uuid?}
+    Note over Order: authenticated (see Authentication), user_uuid from session
     Order->>Inv: ListParts(uuids)
     Inv-->>Order: parts (price)
     Note over Order: sum prices
@@ -243,6 +336,9 @@ flowchart LR
         Inventory["inventory\n:50051"]
         InventoryPG[("inventory-postgres\n:5433 on host")]
         Payment["payment\n:50052"]
+        IAM["iam\n:50053"]
+        IAMPG[("iam-postgres\n:5434 on host")]
+        Redis[("redis\n:6379")]
         Assembly["assembly"]
         Kafka{{"kafka (KRaft)\nkafka:9092 / localhost:9094"}}
         KafkaInit["kafka-init\n(creates topics)"]
@@ -252,32 +348,41 @@ flowchart LR
         Order -- "inventory:50051" --> Inventory
         Order -- "payment:50052" --> Payment
         Inventory --> InventoryPG
+        Order -- "iam:50053" --> IAM
+        Inventory -- "iam:50053" --> IAM
+        IAM --> IAMPG
+        IAM --> Redis
         Order <--> Kafka
         Assembly <--> Kafka
         KafkaInit --> Kafka
         KafkaUI --> Kafka
     end
 
-    Host(["Host (curl / browser)"]) -- "localhost:8080" --> Order
+    Host(["Host (curl / grpcurl / browser)"]) -- "localhost:8080" --> Order
+    Host -- "localhost:50053" --> IAM
     Host -- "localhost:8090" --> KafkaUI
 ```
 
 - `task up` / `task stop` / `task down` — build+start, stop (keep
   containers/volumes), or stop+remove (including volumes) the whole stack.
-  Order and Assembly start only after `kafka-init` has created the topics.
+  Order and Assembly start only after `kafka-init` has created the topics;
+  IAM starts after `iam-postgres` and `redis` are healthy, and Order and
+  Inventory depend on IAM.
 - App containers get `DB_URI` / `KAFKA_BROKERS` pointed at in-network
   hostnames; the host-side `DB_URI` in `order.env` / `inventory.env` is for
   `goose` running on the host. Host-run services (`task run:*`) use Kafka at
   `localhost:9094`.
-- `task migrate:order:up` / `task migrate:inventory:up` (and `:down` /
-  `:status`) — goose migrations. Inventory's first migration seeds the parts
-  catalog. Order's `user_uuid` was added via expand → backfill → contract
+- `task migrate:order:up` / `task migrate:inventory:up` /
+  `task migrate:iam:up` (and `:down` / `:status`) — goose migrations.
+  Inventory's first migration seeds the parts catalog; IAM's creates `users`. Order's `user_uuid` was added via expand → backfill → contract
   (`00002`–`00004`).
 - Kafka UI on http://localhost:8090 shows topics, messages and consumer-group lag.
 - `task test:e2e` (`scripts/e2e_test.sh`) drives this exact stack: `task up` →
-  migrate → HTTP scenarios and error cases → waits for the Kafka chain to bring
-  an order to `ASSEMBLED` → checks stock in Postgres → restarts `order` to
-  prove persistence → `task down`.
+  migrate → register/login through IAM (grpcurl in a container on the compose
+  network) → auth checks (401s, Redis TTL, Inventory metadata) → HTTP
+  scenarios and error cases as the logged-in user → waits for the Kafka chain
+  to bring an order to `ASSEMBLED` → checks stock in Postgres → restarts
+  `order` to prove persistence → logout → `task down`.
 
 ## Error mapping
 
@@ -288,12 +393,18 @@ maps them with `errors.Is`. Repository "not found" is a plain sentinel
 
 | Error | Order HTTP | Inventory gRPC |
 |---|---|---|
+| no / invalid / expired / logged-out session | 401 (auth middleware) | `Unauthenticated` (interceptor) |
 | order / component / part not found | 404 | `NotFound` |
 | invalid input (missing field, malformed UUID, bad enum) | 400 (ogen validation) | `InvalidArgument` |
 | order already paid / cancelled / assembled | 409 | — |
 | component out of stock, incompatible components | 409 | `FailedPrecondition` (`ErrInsufficientStock`, `ErrIncompatibleParts`) |
 | release/commit more than reserved | — | `FailedPrecondition` (`ErrReservationUnderflow`) |
 | anything else | 500 | `Internal` |
+
+IAM's own gRPC mapping: empty login/password, password over 72 bytes,
+malformed UUID → `InvalidArgument`; login taken → `AlreadyExists`; bad
+credentials or unknown/expired session → `Unauthenticated`; unknown user →
+`NotFound`.
 
 Kafka handlers have their own policy: malformed → drop, transient error →
 return (redelivery), business "can't apply" → log and skip.
@@ -306,3 +417,11 @@ return (redelivery), business "can't apply" → log and skip.
   succeeds but the order insert fails, the reservation isn't released.
 - **Row lock held across gRPC calls** in Order's Pay/Cancel/MarkAssembled —
   acceptable at this scale, would need rethinking under load.
+- **No service-to-service authentication.** Inventory's `CommitParts` is
+  exempt from the session check because the Kafka path has no user session;
+  anything that can reach Inventory can call it.
+- **Authentication only, no authorization.** Any logged-in user can read,
+  pay or cancel any order; ownership is recorded (`user_uuid`) but not enforced.
+- **IAM is on every request's critical path** (no Whoami caching by design):
+  if IAM or Redis is down, Order answers 500 and Inventory `Internal`.
+- **Fixed session TTL** — no sliding expiry or refresh; no brute-force protection on Login.

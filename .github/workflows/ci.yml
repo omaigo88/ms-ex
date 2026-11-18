@@ -80,7 +80,7 @@ jobs:
           test -z "$(git status --porcelain)" || { git diff; echo "::error::Run 'task gen && task mocks:gen' and commit the result"; exit 1; }
       - name: go.mod files are tidy
         run: |
-          for m in shared inventory payment order assembly; do
+          for m in shared inventory payment order assembly iam; do
             (cd "$m" && GOWORK=off go mod tidy -diff) || { echo "::error::Run 'go mod tidy' in $m"; exit 1; }
           done
 

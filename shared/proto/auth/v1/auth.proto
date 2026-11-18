@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package auth.v1;
+
+option go_package = "github.com/omaigo88/shared/pkg/proto/auth/v1;authv1";
+
+// AuthService registers users and manages their sessions (session-based auth).
+service AuthService {
+  // Register creates a user with a bcrypt-hashed password.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Login checks credentials and opens a session (stored in Redis with a TTL).
+  rpc Login(LoginRequest) returns (LoginResponse);
+
+  // Whoami resolves a session to its user. Fails with UNAUTHENTICATED if the
+  // session doesn't exist or has expired.
+  rpc Whoami(WhoamiRequest) returns (WhoamiResponse);
+
+  // Logout closes a session. Closing an unknown session is not an error.
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+}
+
+// Request to register a user
+message RegisterRequest {
+  // Unique login
+  string login = 1;
+  // Plain-text password (hashed by the service, never stored as is)
+  string password = 2;
+}
+
+// Response for a register request
+message RegisterResponse {
+  // UUID of the created user
+  string user_uuid = 1;
+}
+
+// Request to open a session
+message LoginRequest {
+  // User login
+  string login = 1;
+  // User password
+  string password = 2;
+}
+
+// Response for a login request
+message LoginResponse {
+  // Session UUID; clients send it as "Authorization: Bearer <session_uuid>"
+  string session_uuid = 1;
+}
+
+// Request to resolve a session
+message WhoamiRequest {
+  // Session UUID
+  string session_uuid = 1;
+}
+
+// Response for a whoami request
+message WhoamiResponse {
+  // UUID of the session's user
+  string user_uuid = 1;
+  // Login of the session's user
+  string login = 2;
+}
+
+// Request to close a session
+message LogoutRequest {
+  // Session UUID
+  string session_uuid = 1;
+}
+
+// Response for a logout request
+message LogoutResponse {}

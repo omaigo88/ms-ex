@@ -13,6 +13,7 @@ import (
 	"github.com/omaigo88/order/pkg/api/mocks"
 	"github.com/omaigo88/order/pkg/repository"
 	"github.com/omaigo88/order/pkg/service"
+	"github.com/omaigo88/shared/pkg/auth"
 	orderv1 "github.com/omaigo88/shared/pkg/openapi/order/v1"
 )
 
@@ -66,16 +67,19 @@ func TestHandler_CreateOrder_Success(t *testing.T) {
 		Status:     repository.OrderStatusPendingPayment,
 	}
 
+	// The user comes from the session that AuthMiddleware put on ctx.
+	ctx := auth.WithUserUUID(context.Background(), userUUID)
+
 	svc := mocks.NewMockService(t)
 	svc.EXPECT().
-		CreateOrder(context.Background(), service.CreateOrderInput{UserUUID: userUUID, HullUUID: hullUUID, EngineUUID: engineUUID}).
+		CreateOrder(ctx, service.CreateOrderInput{UserUUID: userUUID, HullUUID: hullUUID, EngineUUID: engineUUID}).
 		Return(order, nil)
 
 	h := api.NewHandler(svc)
 
-	req := &orderv1.CreateOrderRequest{UserUUID: userUUID, HullUUID: hullUUID, EngineUUID: engineUUID}
+	req := &orderv1.CreateOrderRequest{HullUUID: hullUUID, EngineUUID: engineUUID}
 
-	res, err := h.CreateOrder(context.Background(), req)
+	res, err := h.CreateOrder(ctx, req)
 	require.NoError(t, err)
 
 	resp, ok := res.(*orderv1.CreateOrderResponse)
@@ -85,18 +89,19 @@ func TestHandler_CreateOrder_Success(t *testing.T) {
 }
 
 func TestHandler_CreateOrder_ComponentNotFound(t *testing.T) {
-	hullUUID, engineUUID := uuid.New(), uuid.New()
+	userUUID, hullUUID, engineUUID := uuid.New(), uuid.New(), uuid.New()
+	ctx := auth.WithUserUUID(context.Background(), userUUID)
 
 	svc := mocks.NewMockService(t)
 	svc.EXPECT().
-		CreateOrder(context.Background(), service.CreateOrderInput{HullUUID: hullUUID, EngineUUID: engineUUID}).
+		CreateOrder(ctx, service.CreateOrderInput{UserUUID: userUUID, HullUUID: hullUUID, EngineUUID: engineUUID}).
 		Return(repository.Order{}, service.ErrComponentNotFound)
 
 	h := api.NewHandler(svc)
 
 	req := &orderv1.CreateOrderRequest{HullUUID: hullUUID, EngineUUID: engineUUID}
 
-	res, err := h.CreateOrder(context.Background(), req)
+	res, err := h.CreateOrder(ctx, req)
 	require.NoError(t, err)
 
 	_, ok := res.(*orderv1.CreateOrderNotFound)
@@ -104,22 +109,30 @@ func TestHandler_CreateOrder_ComponentNotFound(t *testing.T) {
 }
 
 func TestHandler_CreateOrder_OutOfStock(t *testing.T) {
-	hullUUID, engineUUID := uuid.New(), uuid.New()
+	userUUID, hullUUID, engineUUID := uuid.New(), uuid.New(), uuid.New()
+	ctx := auth.WithUserUUID(context.Background(), userUUID)
 
 	svc := mocks.NewMockService(t)
 	svc.EXPECT().
-		CreateOrder(context.Background(), service.CreateOrderInput{HullUUID: hullUUID, EngineUUID: engineUUID}).
+		CreateOrder(ctx, service.CreateOrderInput{UserUUID: userUUID, HullUUID: hullUUID, EngineUUID: engineUUID}).
 		Return(repository.Order{}, service.ErrComponentOutOfStock)
 
 	h := api.NewHandler(svc)
 
 	req := &orderv1.CreateOrderRequest{HullUUID: hullUUID, EngineUUID: engineUUID}
 
-	res, err := h.CreateOrder(context.Background(), req)
+	res, err := h.CreateOrder(ctx, req)
 	require.NoError(t, err)
 
 	_, ok := res.(*orderv1.CreateOrderConflict)
 	assert.True(t, ok)
+}
+
+func TestHandler_CreateOrder_NoAuthenticatedUser(t *testing.T) {
+	h := api.NewHandler(mocks.NewMockService(t))
+
+	_, err := h.CreateOrder(context.Background(), &orderv1.CreateOrderRequest{HullUUID: uuid.New(), EngineUUID: uuid.New()})
+	require.Error(t, err, "without the middleware's user the handler must not create an order")
 }
 
 func TestHandler_PayOrder_Success(t *testing.T) {

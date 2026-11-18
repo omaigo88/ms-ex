@@ -9,6 +9,7 @@ require (
 	github.com/avito-tech/go-transaction-manager/trm/v2 v2.0.4
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
+	github.com/omaigo88/iam v0.0.0-00010101000000-000000000000
 	github.com/omaigo88/inventory v0.0.0-00010101000000-000000000000
 	github.com/omaigo88/payment v0.0.0-00010101000000-000000000000
 	github.com/omaigo88/shared v0.0.0-00010101000000-000000000000
@@ -44,6 +45,7 @@ require (
 	github.com/ogen-go/ogen v1.20.1 // indirect
 	github.com/pierrec/lz4/v4 v4.1.31 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
+	github.com/redis/go-redis/v9 v9.23.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
@@ -51,6 +53,7 @@ require (
 	go.opentelemetry.io/otel v1.42.0 // indirect
 	go.opentelemetry.io/otel/metric v1.42.0 // indirect
 	go.opentelemetry.io/otel/trace v1.42.0 // indirect
+	go.uber.org/atomic v1.12.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
@@ -69,3 +72,5 @@ replace github.com/omaigo88/shared => ../shared
 replace github.com/omaigo88/inventory => ../inventory
 
 replace github.com/omaigo88/payment => ../payment
+
+replace github.com/omaigo88/iam => ../iam

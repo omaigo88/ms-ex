@@ -1,0 +1,73 @@
+package main
+
+import (
+	"context"
+	"log/slog"
+	"net"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/reflection"
+
+	"github.com/omaigo88/iam/internal/app"
+	authv1 "github.com/omaigo88/shared/pkg/proto/auth/v1"
+	userv1 "github.com/omaigo88/shared/pkg/proto/user/v1"
+)
+
+const grpcAddress = ":50053"
+
+func main() {
+	ctx := context.Background()
+
+	container, err := app.New(ctx)
+	if err != nil {
+		slog.Error("failed to build container", "error", err)
+		os.Exit(1)
+	}
+	defer container.Close()
+
+	lis, err := net.Listen("tcp", grpcAddress)
+	if err != nil {
+		slog.Error("failed to create listener", "error", err)
+		os.Exit(1)
+	}
+
+	grpcServer := grpc.NewServer(
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionIdle: 15 * time.Minute,
+			Time:              2 * time.Hour,
+			Timeout:           20 * time.Second,
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             1 * time.Minute,
+			PermitWithoutStream: true,
+		}),
+	)
+	authv1.RegisterAuthServiceServer(grpcServer, container.AuthServer)
+	userv1.RegisterUserServiceServer(grpcServer, container.UserServer)
+
+	// Enable reflection for postman/grpcurl (the e2e script registers and
+	// logs in through grpcurl).
+	reflection.Register(grpcServer)
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		<-ctx.Done()
+		slog.Info("shutdown signal received, stopping IAMService")
+		grpcServer.GracefulStop()
+	}()
+
+	slog.Info("starting IAMService", "address", grpcAddress)
+
+	err = grpcServer.Serve(lis)
+	if err != nil {
+		slog.Error("error starting server", "error", err)
+		os.Exit(1)
+	}
+}

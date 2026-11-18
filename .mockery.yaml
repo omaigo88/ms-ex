@@ -26,3 +26,9 @@ packages:
   github.com/omaigo88/assembly/pkg/kafka:
     config:
       all: true
+  github.com/omaigo88/iam/pkg/service:
+    config:
+      all: true
+  github.com/omaigo88/iam/pkg/api:
+    config:
+      all: true

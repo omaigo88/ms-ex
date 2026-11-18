@@ -31,7 +31,7 @@ need a doc update.
 ## How to update
 
 - Edit the affected sections only; keep the existing structure: overview →
-  component diagram → order lifecycle → event flow (+ events table, delivery
+  component diagram → authentication → order lifecycle → event flow (+ events table, delivery
   semantics) → create/cancel → transactions and concurrency → deployment →
   error mapping → known limitations.
 - Diagrams are Mermaid in the markdown — update the diagram *and* the prose/tables

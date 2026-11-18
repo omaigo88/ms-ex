@@ -1,11 +1,12 @@
 // TODO: Don't forget to change the module name github.com/omaigo88 to your own
-//       in all go.mod files (order, inventory, payment, assembly, shared)
+//       in all go.mod files (order, inventory, payment, assembly, iam, shared)
 //       and update all imports in the code!
 
 go 1.26.0
 
 use (
 	./assembly
+	./iam
 	./inventory
 	./order
 	./payment
