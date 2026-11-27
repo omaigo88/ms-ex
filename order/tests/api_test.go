@@ -227,7 +227,7 @@ func TestMain(m *testing.M) {
 	orderRepo := orderRepository.NewMemoryRepository()
 	orderSvc = orderService.NewService(
 		orderInventoryClient, paymentClient, orderRepo,
-		orderService.NewNoopTrManager(), orderService.NewNoopOrderPaidPublisher(),
+		orderService.NewNoopTrManager(), orderService.NewNoopOrderPaidPublisher(), orderService.NewNoopMetrics(),
 	)
 	h := orderAPI.NewHandler(orderSvc)
 	orderServer, err := orderAPI.SetupServer(h)

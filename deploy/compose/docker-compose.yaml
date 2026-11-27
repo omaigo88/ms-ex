@@ -1,6 +1,12 @@
 # Single compose file for the whole infrastructure: Order, Inventory,
 # Payment, Assembly, IAM, the Postgres instances of Order/Inventory/IAM,
-# Redis (IAM sessions), and Kafka (+ Kafka UI on localhost:8090). All services share
+# Redis (IAM sessions), and Kafka (+ Kafka UI on localhost:8090).
+#
+# The "observability" profile adds the telemetry backends (`task up-all`):
+# OTel Collector :4317 → Elasticsearch + Kibana :5601 (logs),
+# Prometheus :9090 + Grafana :3000 (metrics), Jaeger :16686 (traces).
+# Every service exports OTLP to the collector unless OTEL_SDK_DISABLED=true
+# (`task up` sets it, since the plain stack has no collector). All services share
 # the project's default network and reach each other by service name
 # (e.g. Order calls Inventory at "inventory:50051") — no external network or
 # host.docker.internal hack needed since everything lives in one project.
@@ -22,7 +28,13 @@ services:
       PAYMENT_SERVICE_ADDRESS: ${PAYMENT_SERVICE_ADDRESS}
       IAM_SERVICE_ADDRESS: iam:50053
       KAFKA_BROKERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
     depends_on:
+      otel-collector:
+        # Only present with `task up-all`; ignored by plain `task up`.
+        condition: service_started
+        required: false
       order-postgres:
         condition: service_healthy
       iam:
@@ -60,7 +72,13 @@ services:
       # In-network DSN, see the note on order's DB_URI above.
       DB_URI: postgres://${INVENTORY_POSTGRES_USER}:${INVENTORY_POSTGRES_PASSWORD}@inventory-postgres:5432/${INVENTORY_POSTGRES_DB}?sslmode=disable
       IAM_SERVICE_ADDRESS: iam:50053
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
     depends_on:
+      otel-collector:
+        # Only present with `task up-all`; ignored by plain `task up`.
+        condition: service_started
+        required: false
       inventory-postgres:
         condition: service_healthy
       iam:
@@ -93,7 +111,13 @@ services:
       DB_URI: postgres://${IAM_POSTGRES_USER}:${IAM_POSTGRES_PASSWORD}@iam-postgres:5432/${IAM_POSTGRES_DB}?sslmode=disable
       REDIS_ADDRESS: redis:6379
       IAM_SESSION_TTL: ${IAM_SESSION_TTL}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
     depends_on:
+      otel-collector:
+        # Only present with `task up-all`; ignored by plain `task up`.
+        condition: service_started
+        required: false
       iam-postgres:
         condition: service_healthy
       redis:
@@ -133,6 +157,14 @@ services:
       dockerfile: payment/Dockerfile
     ports:
       - "50052:50052"
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
+    depends_on:
+      otel-collector:
+        # Only present with `task up-all`; ignored by plain `task up`.
+        condition: service_started
+        required: false
 
   assembly:
     build:
@@ -142,7 +174,13 @@ services:
       KAFKA_BROKERS: kafka:9092
       ASSEMBLY_BUILD_DELAY_MIN: ${ASSEMBLY_BUILD_DELAY_MIN:-5s}
       ASSEMBLY_BUILD_DELAY_MAX: ${ASSEMBLY_BUILD_DELAY_MAX:-15s}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
     depends_on:
+      otel-collector:
+        # Only present with `task up-all`; ignored by plain `task up`.
+        condition: service_started
+        required: false
       kafka-init:
         condition: service_completed_successfully
 
@@ -198,8 +236,126 @@ services:
       kafka:
         condition: service_healthy
 
+  # ---------------------------------------------------------------------------
+  # Observability (profile "observability", started by `task up-all`)
+  # ---------------------------------------------------------------------------
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.140.0
+    profiles: [observability]
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      # Published for host-run services (`task run:*`).
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      elasticsearch-init:
+        condition: service_completed_successfully
+      prometheus:
+        condition: service_started
+      jaeger:
+        condition: service_started
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+    profiles: [observability]
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  # The collector's elasticsearch exporter writes to a data stream, which
+  # needs a matching index template: otel-logs* gets the same composition as
+  # ES's built-in logs-otel@template (OTel-native field mappings).
+  elasticsearch-init:
+    image: curlimages/curl:8.16.0
+    profiles: [observability]
+    command:
+      - -fsS
+      - -X
+      - PUT
+      - http://elasticsearch:9200/_index_template/otel-logs
+      - -H
+      - "Content-Type: application/json"
+      - --data-binary
+      - "@/otel-logs-index-template.json"
+    volumes:
+      - ./observability/elasticsearch/otel-logs-index-template.json:/otel-logs-index-template.json:ro
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.19.0
+    profiles: [observability]
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  # Creates the otel-logs data view once Kibana is up.
+  kibana-init:
+    image: curlimages/curl:8.16.0
+    profiles: [observability]
+    entrypoint: ["/bin/sh", "/kibana-init.sh"]
+    volumes:
+      - ./observability/kibana-init.sh:/kibana-init.sh:ro
+    depends_on:
+      kibana:
+        condition: service_started
+
+  prometheus:
+    image: prom/prometheus:v3.7.0
+    profiles: [observability]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-remote-write-receiver
+      - --storage.tsdb.retention.time=2d
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:12.2.0
+    profiles: [observability]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+
+  # Jaeger v2 all-in-one (in-memory storage). Receives OTLP from the collector
+  # on jaeger:4317 (not published, the collector owns host port 4317).
+  jaeger:
+    image: jaegertracing/jaeger:2.11.0
+    profiles: [observability]
+    ports:
+      - "16686:16686"
+
 volumes:
   kafka-data:
   order-postgres-data:
   inventory-postgres-data:
   iam-postgres-data:
+  elasticsearch-data:

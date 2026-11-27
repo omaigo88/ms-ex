@@ -162,7 +162,7 @@ func (h groupHandler) ConsumeClaim(session sarama.ConsumerGroupSession, claim sa
 			if err := h.handle(session.Context(), msg); err != nil {
 				// Not marking the offset means this message (and the rest of the
 				// partition) is redelivered on the next session.
-				slog.Error("kafka message handling failed, will be redelivered",
+				slog.ErrorContext(session.Context(), "kafka message handling failed, will be redelivered",
 					"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset, "error", err)
 
 				return err

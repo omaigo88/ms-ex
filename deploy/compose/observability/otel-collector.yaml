@@ -1,0 +1,51 @@
+# OpenTelemetry Collector: the single OTLP endpoint every service exports to.
+# Logs → Elasticsearch (index otel-logs, browsed in Kibana), metrics →
+# Prometheus remote write (charted in Grafana), traces → Jaeger.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+    spike_limit_mib: 100
+  batch: {}
+
+exporters:
+  elasticsearch:
+    endpoints: [http://elasticsearch:9200]
+    logs_index: otel-logs
+
+  prometheusremotewrite:
+    endpoint: http://prometheus:9090/api/v1/write
+    tls:
+      insecure: true
+    # Resource attributes (service.name, …) become labels, so every series
+    # says which service it came from.
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [elasticsearch]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheusremotewrite]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/jaeger]

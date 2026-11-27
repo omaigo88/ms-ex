@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -24,7 +25,10 @@ type deps struct {
 	pay  *mocks.MockPaymentClient
 	repo *mocks.MockRepository
 	pub  *mocks.MockOrderPaidPublisher
-	svc  *service.Service
+	// met is strict like every mock here: a test that doesn't expect a metric
+	// fails if one is recorded (e.g. on a failed or no-op operation).
+	met *mocks.MockMetrics
+	svc *service.Service
 }
 
 func newDeps(t *testing.T) deps {
@@ -35,8 +39,9 @@ func newDeps(t *testing.T) deps {
 		pay:  mocks.NewMockPaymentClient(t),
 		repo: mocks.NewMockRepository(t),
 		pub:  mocks.NewMockOrderPaidPublisher(t),
+		met:  mocks.NewMockMetrics(t),
 	}
-	d.svc = service.NewService(d.inv, d.pay, d.repo, service.NewNoopTrManager(), d.pub)
+	d.svc = service.NewService(d.inv, d.pay, d.repo, service.NewNoopTrManager(), d.pub, d.met)
 
 	return d
 }
@@ -48,6 +53,7 @@ func orderWithStatus(st repository.OrderStatus) repository.Order {
 		HullUUID:   uuid.New(),
 		EngineUUID: uuid.New(),
 		Status:     st,
+		CreatedAt:  time.Now().Add(-10 * time.Second),
 	}
 }
 
@@ -73,6 +79,7 @@ func TestService_CreateOrder_Success(t *testing.T) {
 	d.repo.EXPECT().Save(context.Background(), mock.MatchedBy(func(o repository.Order) bool {
 		return o.UserUUID == userUUID && o.Status == repository.OrderStatusPendingPayment
 	})).Return(nil)
+	d.met.EXPECT().OrderCreated(context.Background(), int64(800000)).Return()
 
 	order, err := d.svc.CreateOrder(context.Background(), service.CreateOrderInput{
 		UserUUID: userUUID, HullUUID: hullUUID, EngineUUID: engineUUID,
@@ -151,6 +158,7 @@ func TestService_PayOrder_Success_PublishesOrderPaid(t *testing.T) {
 		PaymentMethod:   repository.PaymentMethodCard,
 		TransactionUUID: transactionUUID,
 	}).Return(nil)
+	d.met.EXPECT().OrderPaid(context.Background(), repository.PaymentMethodCard).Return()
 
 	order, err := d.svc.PayOrder(context.Background(), existing.OrderUUID, repository.PaymentMethodCard)
 	require.NoError(t, err)
@@ -167,6 +175,7 @@ func TestService_PayOrder_PublishFailureDoesNotFailPayment(t *testing.T) {
 		Return(&paymentv1.PayOrderResponse{TransactionUuid: uuid.NewString()}, nil)
 	d.repo.EXPECT().Save(context.Background(), mock.Anything).Return(nil)
 	d.pub.EXPECT().PublishOrderPaid(context.Background(), mock.Anything).Return(errors.New("broker down"))
+	d.met.EXPECT().OrderPaid(context.Background(), repository.PaymentMethodCard).Return()
 
 	order, err := d.svc.PayOrder(context.Background(), existing.OrderUUID, repository.PaymentMethodCard)
 	require.NoError(t, err)
@@ -228,6 +237,7 @@ func TestService_CancelOrder_Success_ReleasesReservation(t *testing.T) {
 	d.inv.EXPECT().ReleaseParts(context.Background(), &inventoryv1.ReleasePartsRequest{Uuids: partUUIDs(existing)}).
 		Return(&inventoryv1.ReleasePartsResponse{}, nil)
 	d.repo.EXPECT().Save(context.Background(), savedWithStatus(repository.OrderStatusCancelled)).Return(nil)
+	d.met.EXPECT().OrderCancelled(context.Background()).Return()
 
 	order, err := d.svc.CancelOrder(context.Background(), existing.OrderUUID)
 	require.NoError(t, err)
@@ -269,6 +279,7 @@ func TestService_MarkAssembled_CommitsPartsAndSaves(t *testing.T) {
 	d.inv.EXPECT().CommitParts(context.Background(), &inventoryv1.CommitPartsRequest{Uuids: partUUIDs(existing)}).
 		Return(&inventoryv1.CommitPartsResponse{}, nil)
 	d.repo.EXPECT().Save(context.Background(), savedWithStatus(repository.OrderStatusAssembled)).Return(nil)
+	d.met.EXPECT().OrderAssembled(context.Background(), mock.MatchedBy(func(d time.Duration) bool { return d > 0 })).Return()
 
 	require.NoError(t, d.svc.MarkAssembled(context.Background(), existing.OrderUUID))
 }

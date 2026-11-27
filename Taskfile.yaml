@@ -29,6 +29,8 @@ vars:
 
   MODULES: order inventory payment assembly iam
 
+  COMPOSE_ENV_FILES: --env-file ../../order.env --env-file ../../inventory.env --env-file ../../iam.env
+
 tasks:
   formatters:install:
     desc: "Installs gofumpt and gci"
@@ -204,25 +206,35 @@ tasks:
       - go run ./cmd
 
   up:
-    desc: "Build and start the whole infrastructure (all services, their Postgres instances, Redis, Kafka)"
+    desc: "Build and start the core stack (all services, their Postgres instances, Redis, Kafka) with telemetry export off"
     dir: deploy/compose
     cmds:
       - echo "[task] 📦 Starting the infrastructure"
-      - docker compose --env-file ../../order.env --env-file ../../inventory.env --env-file ../../iam.env up --build --detach
+      # No collector in the core stack: OTEL_SDK_DISABLED stops the services
+      # from trying (and failing) to export telemetry.
+      - OTEL_SDK_DISABLED=true docker compose {{.COMPOSE_ENV_FILES}} up --build --detach
+
+  up-all:
+    desc: "Build and start the core stack plus observability (OTel Collector, Elasticsearch/Kibana, Prometheus/Grafana, Jaeger)"
+    dir: deploy/compose
+    cmds:
+      - echo "[task] 📦 Starting the infrastructure with observability"
+      - OTEL_SDK_DISABLED=false docker compose {{.COMPOSE_ENV_FILES}} --profile observability up --build --detach
+      - echo "[task] 🔭 Kibana http://localhost:5601 · Grafana http://localhost:3000 · Jaeger http://localhost:16686 · Prometheus http://localhost:9090"
 
   stop:
-    desc: "Stop the infrastructure without removing containers/volumes"
+    desc: "Stop the infrastructure (incl. observability) without removing containers/volumes"
     dir: deploy/compose
     cmds:
       - echo "[task] ⏸️  Stopping the infrastructure"
-      - docker compose --env-file ../../order.env --env-file ../../inventory.env --env-file ../../iam.env stop
+      - docker compose {{.COMPOSE_ENV_FILES}} --profile observability stop
 
   down:
-    desc: "Stop and remove the infrastructure (containers, networks, volumes)"
+    desc: "Stop and remove the infrastructure incl. observability (containers, networks, volumes)"
     dir: deploy/compose
     cmds:
       - echo "[task] 🛑 Removing the infrastructure"
-      - docker compose --env-file ../../order.env --env-file ../../inventory.env --env-file ../../iam.env down --volumes
+      - docker compose {{.COMPOSE_ENV_FILES}} --profile observability down --volumes
 
   migrate:order:up:
     desc: "Applies all Order service migrations"

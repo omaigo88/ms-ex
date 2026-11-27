@@ -1,6 +1,7 @@
-// Package app wires OrderService's dependency graph: repository,
-// transaction manager, gRPC clients, business logic, and the HTTP
-// transport adapter behind the IAM authentication middleware.
+// Package app wires OrderService's dependency graph: telemetry (logs,
+// metrics, traces), repository, transaction manager, gRPC clients, business
+// logic, and the HTTP transport adapter behind the IAM authentication
+// middleware.
 package app
 
 import (
@@ -8,24 +9,33 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"time"
 
 	trmpgx "github.com/avito-tech/go-transaction-manager/drivers/pgxv5/v2"
 	"github.com/avito-tech/go-transaction-manager/trm/v2/manager"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 
 	"github.com/omaigo88/order/pkg/api"
 	orderkafka "github.com/omaigo88/order/pkg/kafka"
+	ordermetrics "github.com/omaigo88/order/pkg/metrics"
 	"github.com/omaigo88/order/pkg/repository"
 	"github.com/omaigo88/order/pkg/service"
 	"github.com/omaigo88/shared/pkg/auth"
 	sharedkafka "github.com/omaigo88/shared/pkg/kafka"
+	"github.com/omaigo88/shared/pkg/logger"
+	"github.com/omaigo88/shared/pkg/metrics"
 	authv1 "github.com/omaigo88/shared/pkg/proto/auth/v1"
 	inventoryv1 "github.com/omaigo88/shared/pkg/proto/inventory/v1"
 	paymentv1 "github.com/omaigo88/shared/pkg/proto/payment/v1"
+	"github.com/omaigo88/shared/pkg/telemetry"
+	"github.com/omaigo88/shared/pkg/tracing"
 )
 
 const (
@@ -35,6 +45,7 @@ const (
 	defaultKafkaBrokers            = "localhost:9094"
 
 	consumerGroupID = "order-service"
+	serviceName     = "order-service"
 )
 
 var grpcKeepaliveParams = grpc.WithKeepaliveParams(keepalive.ClientParameters{
@@ -56,6 +67,8 @@ func getEnv(key, fallback string) string {
 type Container struct {
 	// closers release resources in reverse acquisition order.
 	closers []func()
+	// telemetry flushes logs/metrics/traces after everything else has closed.
+	telemetry []telemetry.ShutdownFunc
 
 	// Handler is the ogen-generated OpenAPI server wrapped in the IAM
 	// authentication middleware, ready to pass to an http.Server.
@@ -77,6 +90,12 @@ func New(ctx context.Context) (_ *Container, err error) {
 			c.Close()
 		}
 	}()
+
+	// Telemetry first, so every later step already logs and traces through it.
+	c.telemetry, err = telemetry.Init(ctx, serviceName, logger.Init, tracing.InitTracer, metrics.Init)
+	if err != nil {
+		return nil, err
+	}
 
 	pool, err := pgxpool.New(ctx, os.Getenv("DB_URI"))
 	if err != nil {
@@ -121,12 +140,18 @@ func New(ctx context.Context) (_ *Container, err error) {
 
 	c.closers = append(c.closers, func() { _ = c.consumer.Close() })
 
+	recorder, err := ordermetrics.New(otel.GetMeterProvider())
+	if err != nil {
+		return nil, fmt.Errorf("create business metrics: %w", err)
+	}
+
 	c.service = service.NewService(
 		inventoryv1.NewInventoryServiceClient(inventoryConn),
 		paymentv1.NewPaymentServiceClient(paymentConn),
 		repository.NewPostgresRepository(pool),
 		manager.Must(trmpgx.NewDefaultFactory(pool)),
 		orderkafka.NewOrderPaidPublisher(producer),
+		recorder,
 	)
 
 	server, err := api.SetupServer(api.NewHandler(c.service))
@@ -134,13 +159,38 @@ func New(ctx context.Context) (_ *Container, err error) {
 		return nil, fmt.Errorf("setup OpenAPI server: %w", err)
 	}
 
-	c.Handler = api.AuthMiddleware(authv1.NewAuthServiceClient(iamConn))(server)
+	// otelhttp is outermost so the request span covers authentication too and
+	// the auth middleware's Whoami call becomes its child.
+	c.Handler = otelhttp.NewHandler(
+		api.AuthMiddleware(authv1.NewAuthServiceClient(iamConn))(server),
+		"order-http",
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			return r.Method + " " + spanRoute(r.URL.Path)
+		}),
+	)
 
 	return c, nil
 }
 
+// uuidSegment matches a UUID path segment.
+var uuidSegment = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+
+// spanRoute turns a request path into a low-cardinality span name by
+// replacing order UUIDs with the OpenAPI path parameter, e.g.
+// /api/v1/orders/{order_uuid}/pay.
+func spanRoute(path string) string {
+	return uuidSegment.ReplaceAllString(path, "{order_uuid}")
+}
+
+// dial opens a gRPC client connection with trace context propagation and
+// client spans (otelgrpc).
 func (c *Container) dial(addr string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
-	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()), grpcKeepaliveParams)
+	opts = append(
+		opts,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		grpcKeepaliveParams,
+	)
 
 	conn, err := grpc.NewClient(addr, opts...)
 	if err != nil {
@@ -164,4 +214,7 @@ func (c *Container) Close() {
 	}
 
 	c.closers = nil
+
+	telemetry.Flush(c.telemetry...)
+	c.telemetry = nil
 }

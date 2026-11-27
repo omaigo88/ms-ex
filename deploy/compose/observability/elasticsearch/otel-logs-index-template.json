@@ -1,0 +1,31 @@
+{
+  "index_patterns": [
+    "otel-logs*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "logs@mappings",
+    "logs@settings",
+    "otel@mappings",
+    "logs-otel@mappings",
+    "semconv-resource-to-ecs@mappings",
+    "logs@custom",
+    "logs-otel@custom",
+    "ecs@mappings"
+  ],
+  "ignore_missing_component_templates": [
+    "logs@custom",
+    "logs-otel@custom"
+  ],
+  "data_stream": {},
+  "template": {
+    "mappings": {
+      "properties": {
+        "data_stream.type": {
+          "type": "constant_keyword",
+          "value": "logs"
+        }
+      }
+    }
+  }
+}

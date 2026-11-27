@@ -41,6 +41,15 @@ paths:
   rename it. A new module also goes into the tidy loop there.
 - Ports: Order 8080, Inventory 50051, Payment 50052, IAM 50053,
   order-postgres 5432, inventory-postgres 5433, iam-postgres 5434, Redis 6379,
-  Kafka 9094 (host) / 9092 (in-network), Kafka UI 8090.
+  Kafka 9094 (host) / 9092 (in-network), Kafka UI 8090; observability profile:
+  OTLP 4317/4318, Elasticsearch 9200, Kibana 5601, Prometheus 9090,
+  Grafana 3000, Jaeger 16686.
+- Observability backends are the Compose profile `observability`
+  (`task up-all`); configs live in `deploy/compose/observability/`. `task up`
+  exports `OTEL_SDK_DISABLED=true`, `up-all` `false`; `stop`/`down` always pass
+  `--profile observability`. App services depend on `otel-collector` with
+  `required: false` (needs Compose ≥ 2.20) — never a hard dependency on a
+  profiled service. Every app service gets `OTEL_EXPORTER_OTLP_ENDPOINT` and
+  `OTEL_SDK_DISABLED` in compose.
 - Compose env files: `order.env`, `inventory.env`, `iam.env` (all passed by
   `task up/stop/down`); variables are service-prefixed so they can't collide.

@@ -16,11 +16,15 @@ Five Go services build a toy "order a spaceship" system:
   Every Order HTTP request and every Inventory gRPC call is authenticated
   against it.
 
+Every service emits telemetry over OTLP to an OpenTelemetry Collector — see
+[Observability](#observability).
+
 Contracts and shared plumbing live in the `shared` module: protobuf
 (`shared/proto` → `shared/pkg/proto`), the Order OpenAPI spec
 (`shared/api/order/v1` → `shared/pkg/openapi`, ogen), the sarama wrapper
-`shared/pkg/kafka`, and `shared/pkg/auth` (session/user context helpers and the
-gRPC client interceptor that forwards the session).
+`shared/pkg/kafka`, `shared/pkg/auth` (session/user context helpers and the
+gRPC client interceptor that forwards the session), and the telemetry setup
+`shared/pkg/{logger,metrics,tracing,telemetry}`.
 
 Each service follows the same layering (`<service>/pkg/...`):
 
@@ -321,6 +325,73 @@ Concurrent requests are serialized with row locks (`SELECT … FOR UPDATE`):
   **sorted before locking**, so two requests for overlapping parts always lock
   in the same order and can't deadlock.
 
+## Observability
+
+```mermaid
+flowchart TB
+    subgraph Services
+        direction TB
+        S1["Order Service"]
+        S2["Inventory Service"]
+        S3["Payment Service"]
+        S4["IAM Service"]
+        S5["Assembly Service"]
+    end
+
+    Services -- "OTLP gRPC (logs + metrics + traces)" --> Collector["OTEL Collector\n:4317"]
+    Collector -- "logs" --> ES[("Elasticsearch\nindex otel-logs")]
+    Collector -- "metrics (remote write)" --> Prom[("Prometheus\n:9090")]
+    Collector -- "traces" --> Jaeger["Jaeger\n:16686"]
+    ES --> Kibana["Kibana\n:5601"]
+    Prom --> Grafana["Grafana\n:3000"]
+```
+
+Each service initialises telemetry first thing in `internal/app` and flushes
+it last on shutdown (`telemetry.Flush`, 5 s budget):
+
+| Service | `logger.Init` | `metrics.Init` | `tracing.InitTracer` | Instrumentation |
+|---|---|---|---|---|
+| order | ✓ | ✓ | ✓ | `otelhttp` around the whole HTTP handler (auth middleware + ogen); `otelgrpc` client on Inventory/Payment/IAM; ogen adds an operation span |
+| inventory | ✓ | — | ✓ | `otelgrpc` server; `otelgrpc` client on IAM (the auth interceptor's Whoami) |
+| payment | ✓ | — | ✓ | `otelgrpc` server |
+| iam | ✓ | — | ✓ | `otelgrpc` server |
+| assembly | ✓ | — | — | — (outside the traced create-order flow) |
+
+- **Logs** — `slog` stays the logging API. `logger.Init` installs a fan-out
+  handler: JSON to stdout and the `otelslog` bridge → OTLP. `*Context` calls
+  carry `trace_id`/`span_id`, so a log line in Kibana (data view `otel-logs`,
+  created by `kibana-init`) leads to its trace in Jaeger. The collector's
+  Elasticsearch exporter writes the `otel-logs` data stream, whose index
+  template (`elasticsearch-init`) reuses ES's OTel-native `logs-otel` mappings.
+  Session UUIDs are never logged (they are bearer credentials).
+- **Metrics** — business metrics live in Order behind the service's `Metrics`
+  interface (`order/pkg/service/metrics.go`, implemented by
+  `order/pkg/metrics`), recorded only after the state change committed.
+  Pushed every 10 s; the collector remote-writes them to Prometheus with
+  resource attributes as labels (`service_name`, …). Grafana has Prometheus
+  and Jaeger data sources and an **Orders** dashboard, all provisioned.
+
+  | Prometheus series | Type | Recorded when |
+  |---|---|---|
+  | `orders_created_total` | counter | an order is created |
+  | `orders_paid_total{payment_method}` | counter | an order is paid |
+  | `orders_cancelled_total` | counter | an order is cancelled |
+  | `orders_assembled_total` | counter | an order becomes ASSEMBLED (not on redelivery) |
+  | `order_total_price_rub` | histogram | an order is created (price in RUB) |
+  | `order_fulfillment_duration_seconds` | histogram | an order becomes ASSEMBLED (time since creation) |
+
+  `otelhttp` adds the standard `http_server_request_duration_seconds` etc.
+- **Traces** — W3C `traceparent` travels in HTTP headers and gRPC metadata,
+  so `POST /api/v1/orders` is one trace: Order HTTP span → Whoami (IAM) →
+  ListParts / ReserveParts (Inventory → its own Whoami). The pay request adds
+  Payment. HTTP span names use the route
+  (`POST /api/v1/orders/{order_uuid}/pay`), not the raw path.
+- **Switch** — `task up` runs without the observability profile and sets the
+  standard `OTEL_SDK_DISABLED=true`: services then log JSON to stdout only and
+  export nothing. `task up-all` starts the profile with telemetry on. The
+  endpoint is the standard `OTEL_EXPORTER_OTLP_ENDPOINT` (in Compose
+  `http://otel-collector:4317`, host default `localhost:4317`).
+
 ## Deployment
 
 `deploy/compose/docker-compose.yaml` is the single Compose file for the whole
@@ -344,6 +415,15 @@ flowchart LR
         KafkaInit["kafka-init\n(creates topics)"]
         KafkaUI["kafka-ui\n:8090"]
 
+        subgraph Obs["profile observability (task up-all)"]
+            Collector["otel-collector\n:4317 / :4318"]
+            ES[("elasticsearch\n:9200")]
+            Kibana["kibana\n:5601"]
+            Prom[("prometheus\n:9090")]
+            Grafana["grafana\n:3000"]
+            Jaeger["jaeger\n:16686"]
+        end
+
         Order --> OrderPG
         Order -- "inventory:50051" --> Inventory
         Order -- "payment:50052" --> Payment
@@ -356,15 +436,24 @@ flowchart LR
         Assembly <--> Kafka
         KafkaInit --> Kafka
         KafkaUI --> Kafka
+        Order & Inventory & Payment & IAM & Assembly -. "OTLP" .-> Collector
+        Collector --> ES & Prom & Jaeger
+        Kibana --> ES
+        Grafana --> Prom
     end
 
     Host(["Host (curl / grpcurl / browser)"]) -- "localhost:8080" --> Order
     Host -- "localhost:50053" --> IAM
     Host -- "localhost:8090" --> KafkaUI
+    Host -- "localhost:5601 · 3000 · 16686 · 9090" --> Obs
 ```
 
 - `task up` / `task stop` / `task down` — build+start, stop (keep
   containers/volumes), or stop+remove (including volumes) the whole stack.
+  `task up-all` additionally starts the `observability` profile (collector,
+  Elasticsearch, `elasticsearch-init`, Kibana, `kibana-init`, Prometheus,
+  Grafana, Jaeger); `stop`/`down` always include it. With the profile active,
+  services start after the collector (`depends_on … required: false`).
   Order and Assembly start only after `kafka-init` has created the topics;
   IAM starts after `iam-postgres` and `redis` are healthy, and Order and
   Inventory depend on IAM.
@@ -377,12 +466,14 @@ flowchart LR
   Inventory's first migration seeds the parts catalog; IAM's creates `users`. Order's `user_uuid` was added via expand → backfill → contract
   (`00002`–`00004`).
 - Kafka UI on http://localhost:8090 shows topics, messages and consumer-group lag.
-- `task test:e2e` (`scripts/e2e_test.sh`) drives this exact stack: `task up` →
+- `task test:e2e` (`scripts/e2e_test.sh`) drives this exact stack: `task up-all` →
   migrate → register/login through IAM (grpcurl in a container on the compose
   network) → auth checks (401s, Redis TTL, Inventory metadata) → HTTP
   scenarios and error cases as the logged-in user → waits for the Kafka chain
   to bring an order to `ASSEMBLED` → checks stock in Postgres → restarts
-  `order` to prove persistence → logout → `task down`.
+  `order` to prove persistence → checks the run's logs in Elasticsearch,
+  business metrics in Prometheus and distributed traces in Jaeger, plus the
+  UIs → logout → `task down`.
 
 ## Error mapping
 
@@ -425,3 +516,10 @@ return (redelivery), business "can't apply" → log and skip.
 - **IAM is on every request's critical path** (no Whoami caching by design):
   if IAM or Redis is down, Order answers 500 and Inventory `Internal`.
 - **Fixed session TTL** — no sliding expiry or refresh; no brute-force protection on Login.
+- **Traces stop at Kafka.** Trace context isn't put into Kafka message
+  headers, so OrderPaid → AssemblyService → ShipAssembled → CommitParts shows
+  up as separate traces (CommitParts' own trace starts in Order's consumer);
+  AssemblyService exports logs only. No DB/Redis client spans either.
+- **Telemetry is best-effort.** If the collector is down, services keep
+  working and drop telemetry after the exporters' retries; Jaeger stores
+  traces in memory (lost on restart).

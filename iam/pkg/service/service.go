@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -115,6 +116,8 @@ func (s *Service) Register(ctx context.Context, login, password string) (uuid.UU
 		return uuid.Nil, err
 	}
 
+	slog.InfoContext(ctx, "user registered", "user_uuid", user.UUID, "login", user.Login)
+
 	return user.UUID, nil
 }
 
@@ -150,6 +153,9 @@ func (s *Service) Login(ctx context.Context, login, password string) (uuid.UUID,
 		return uuid.Nil, err
 	}
 
+	// Never log the session UUID itself: it is the bearer credential.
+	slog.InfoContext(ctx, "user logged in", "user_uuid", user.UUID)
+
 	return session.UUID, nil
 }
 
@@ -180,7 +186,13 @@ func (s *Service) Logout(ctx context.Context, sessionUUID string) error {
 		return ErrInvalidUUID
 	}
 
-	return s.sessions.Delete(ctx, id)
+	if err := s.sessions.Delete(ctx, id); err != nil {
+		return err
+	}
+
+	slog.InfoContext(ctx, "session closed")
+
+	return nil
 }
 
 // GetUser returns a user by UUID.

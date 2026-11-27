@@ -12,7 +12,7 @@ Go 1.26 workspace of five services plus a shared module. Read
 | `payment`   | gRPC `:50052`             | payments (stateless)                   |
 | `assembly`  | Kafka only (no port)      | simulated ship assembly (stateless)    |
 | `iam`       | gRPC `:50053`             | users (Postgres, bcrypt) + sessions (Redis, 24 h TTL) |
-| `shared`    | —                         | proto/OpenAPI contracts, generated code, `pkg/kafka`, `pkg/auth` |
+| `shared`    | —                         | proto/OpenAPI contracts, generated code, `pkg/kafka`, `pkg/auth`, telemetry (`pkg/logger`, `pkg/metrics`, `pkg/tracing`) |
 
 Order flow: `POST /orders` (Inventory `ReserveParts`) → `POST /orders/{id}/pay`
 (Payment `PayOrder`, status `PAID`, publish `OrderPaid`) → AssemblyService
@@ -25,6 +25,11 @@ Inventory's gRPC interceptor call IAM `Whoami` on every request (no caching);
 Order forwards the session to Inventory as outgoing metadata `session-uuid`;
 an order's `user_uuid` comes from the session. Missing/invalid session → HTTP
 401 / gRPC `Unauthenticated`. Inventory `CommitParts` is exempt (Kafka path).
+
+Observability: every service exports OTLP (logs + traces; Order also
+business metrics) to the OTel Collector → Elasticsearch `otel-logs`/Kibana,
+Prometheus/Grafana, Jaeger. The create-order flow (order, iam, inventory,
+payment) is traced end to end via `otelhttp`/`otelgrpc`.
 
 Statuses: `PENDING_PAYMENT`, `PAID`, `ASSEMBLED`, `CANCELLED`. Pay/Cancel on a
 non-pending order → `ErrOrderAlreadyPaid` / `ErrOrderCancelled` /
@@ -54,12 +59,15 @@ non-pending order → `ErrOrderAlreadyPaid` / `ErrOrderCancelled` /
 | `task test` | unit tests, `-race`, all modules |
 | `task test:api` | `order/tests` — HTTP API against in-memory wiring, no Docker |
 | `task test:coverage` | coverage, threshold 40% |
-| `task up` / `stop` / `down` | whole stack via `deploy/compose/docker-compose.yaml` (project `ms-ex`) |
+| `task up` / `stop` / `down` | core stack via `deploy/compose/docker-compose.yaml` (project `ms-ex`), telemetry export off |
+| `task up-all` | core + `observability` profile (collector, ES/Kibana, Prometheus/Grafana, Jaeger) |
 | `task migrate:{order,inventory,iam}:{up,down,status}` | goose |
-| `task test:e2e` | `scripts/e2e_test.sh`: real stack + Kafka chain, tears down after |
+| `task test:e2e` | `scripts/e2e_test.sh`: `up-all` stack, Kafka chain, telemetry checks; tears down after |
 | `task run:{order,inventory,payment,assembly,iam}` | run one service on the host |
 
 Kafka UI: http://localhost:8090. Host Kafka listener: `localhost:9094`.
+With `up-all`: Kibana :5601, Grafana :3000, Jaeger :16686, Prometheus :9090,
+OTLP :4317.
 
 ## Definition of done
 
@@ -94,7 +102,7 @@ e2e — step 4 is on you before opening the PR.
 ## Where the details live
 
 - `.claude/rules/` — conventions, auto-loaded by path (Go style, layering,
-  testing, persistence, Kafka, contracts, infra); `architecture-docs.md` is
+  testing, persistence, Kafka, contracts, infra, observability); `architecture-docs.md` is
   always loaded.
 - `.claude/skills/` — step-by-step playbooks: `verify`, `add-grpc-method`,
   `add-kafka-event`, `add-migration`, `change-order-api`, `add-service`.
@@ -108,3 +116,4 @@ e2e — step 4 is on you before opening the PR.
 - No service-to-service auth: Inventory `CommitParts` skips the session check.
 - Authentication only — no roles/ownership checks; no Whoami caching, no
   refresh tokens, fixed session TTL (all by design for this stage).
+- Traces stop at Kafka (no context in message headers); Assembly exports logs only.
