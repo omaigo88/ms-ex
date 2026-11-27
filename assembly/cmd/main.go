@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	container, err := app.New()
+	container, err := app.New(context.Background())
 	if err != nil {
 		slog.Error("failed to build container", "error", err)
 		os.Exit(1)

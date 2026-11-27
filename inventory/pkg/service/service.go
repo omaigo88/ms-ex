@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 
 	"github.com/google/uuid"
@@ -199,28 +200,38 @@ func (s *Service) updateParts(
 // a set: stock and cross-part compatibility are both checked before any
 // reservation is persisted.
 func (s *Service) ReserveParts(ctx context.Context, rawUUIDs []string) error {
-	return s.updateParts(
+	return logOutcome(ctx, "parts reserved", rawUUIDs, s.updateParts(
 		ctx, rawUUIDs,
 		func(p *domain.Part) error { return p.Reserve(1) },
 		s.checker.Check,
-	)
+	))
 }
 
 // ReleaseParts releases a previous reservation of one unit of every listed part.
 func (s *Service) ReleaseParts(ctx context.Context, rawUUIDs []string) error {
-	return s.updateParts(
+	return logOutcome(ctx, "parts released", rawUUIDs, s.updateParts(
 		ctx, rawUUIDs,
 		func(p *domain.Part) error { return p.Release(1) },
 		nil,
-	)
+	))
 }
 
 // CommitParts writes off one previously-reserved unit of every listed part:
 // it leaves the warehouse after the ship has been assembled.
 func (s *Service) CommitParts(ctx context.Context, rawUUIDs []string) error {
-	return s.updateParts(
+	return logOutcome(ctx, "parts committed", rawUUIDs, s.updateParts(
 		ctx, rawUUIDs,
 		func(p *domain.Part) error { return p.Commit(1) },
 		nil,
-	)
+	))
+}
+
+// logOutcome logs a successful stock change (with the request's trace
+// context) and passes err through unchanged.
+func logOutcome(ctx context.Context, msg string, partUUIDs []string, err error) error {
+	if err == nil {
+		slog.InfoContext(ctx, msg, "part_uuids", partUUIDs)
+	}
+
+	return err
 }

@@ -72,6 +72,7 @@ type Service struct {
 	repo            Repository
 	trManager       TrManager
 	publisher       OrderPaidPublisher
+	metrics         Metrics
 }
 
 // NewService creates a new Service.
@@ -81,6 +82,7 @@ func NewService(
 	repo Repository,
 	trManager TrManager,
 	publisher OrderPaidPublisher,
+	metrics Metrics,
 ) *Service {
 	return &Service{
 		inventoryClient: inventoryClient,
@@ -88,6 +90,7 @@ func NewService(
 		repo:            repo,
 		trManager:       trManager,
 		publisher:       publisher,
+		metrics:         metrics,
 	}
 }
 
@@ -215,6 +218,10 @@ func (s *Service) CreateOrder(ctx context.Context, input CreateOrderInput) (repo
 		return repository.Order{}, err
 	}
 
+	s.metrics.OrderCreated(ctx, order.TotalPrice)
+	slog.InfoContext(ctx, "order created",
+		"order_uuid", order.OrderUUID, "user_uuid", order.UserUUID, "total_price", order.TotalPrice)
+
 	return order, nil
 }
 
@@ -278,6 +285,9 @@ func (s *Service) PayOrder(ctx context.Context, id uuid.UUID, method repository.
 		return repository.Order{}, err
 	}
 
+	s.metrics.OrderPaid(ctx, method)
+	slog.InfoContext(ctx, "order paid", "order_uuid", paid.OrderUUID, "payment_method", method)
+
 	// Published after commit, never for a rolled-back payment. A failure here
 	// is logged rather than returned: the payment itself succeeded, and a 500
 	// would only make the client retry into "already paid".
@@ -287,7 +297,7 @@ func (s *Service) PayOrder(ctx context.Context, id uuid.UUID, method repository.
 		PaymentMethod:   method,
 		TransactionUUID: *paid.TransactionUUID,
 	}); err != nil {
-		slog.Error("failed to publish OrderPaid", "order_uuid", paid.OrderUUID, "error", err)
+		slog.ErrorContext(ctx, "failed to publish OrderPaid", "order_uuid", paid.OrderUUID, "error", err)
 	}
 
 	return paid, nil
@@ -326,6 +336,9 @@ func (s *Service) CancelOrder(ctx context.Context, id uuid.UUID) (repository.Ord
 		return repository.Order{}, err
 	}
 
+	s.metrics.OrderCancelled(ctx)
+	slog.InfoContext(ctx, "order cancelled", "order_uuid", cancelled.OrderUUID)
+
 	return cancelled, nil
 }
 
@@ -335,10 +348,14 @@ func (s *Service) CancelOrder(ctx context.Context, id uuid.UUID) (repository.Ord
 // no-op; an event for an unknown or non-PAID order is logged and dropped
 // rather than retried forever.
 func (s *Service) MarkAssembled(ctx context.Context, id uuid.UUID) error {
-	return s.trManager.Do(ctx, func(ctx context.Context) error {
+	// assembled is set only when this call actually moved the order to
+	// ASSEMBLED, so redeliveries and skipped events aren't counted.
+	var assembled *repository.Order
+
+	err := s.trManager.Do(ctx, func(ctx context.Context) error {
 		order, err := s.getForUpdate(ctx, id)
 		if errors.Is(err, ErrOrderNotFound) {
-			slog.Warn("ShipAssembled for unknown order, skipping", "order_uuid", id)
+			slog.WarnContext(ctx, "ShipAssembled for unknown order, skipping", "order_uuid", id)
 
 			return nil
 		}
@@ -352,7 +369,7 @@ func (s *Service) MarkAssembled(ctx context.Context, id uuid.UUID) error {
 			return nil
 		case repository.OrderStatusPaid:
 		default:
-			slog.Warn("ShipAssembled for an order that isn't paid, skipping",
+			slog.WarnContext(ctx, "ShipAssembled for an order that isn't paid, skipping",
 				"order_uuid", id, "status", order.Status)
 
 			return nil
@@ -364,6 +381,22 @@ func (s *Service) MarkAssembled(ctx context.Context, id uuid.UUID) error {
 
 		order.Status = repository.OrderStatusAssembled
 
-		return s.repo.Save(ctx, order)
+		if err := s.repo.Save(ctx, order); err != nil {
+			return err
+		}
+
+		assembled = &order
+
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	if assembled != nil {
+		s.metrics.OrderAssembled(ctx, time.Since(assembled.CreatedAt))
+		slog.InfoContext(ctx, "order assembled", "order_uuid", assembled.OrderUUID)
+	}
+
+	return nil
 }

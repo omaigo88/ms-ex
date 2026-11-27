@@ -1,4 +1,5 @@
-// Package app wires IAMService's dependency graph: PostgreSQL user storage,
+// Package app wires IAMService's dependency graph: telemetry (logs, traces),
+// PostgreSQL user storage,
 // Redis session storage, business logic, and the gRPC transport adapters.
 package app
 
@@ -14,17 +15,22 @@ import (
 	"github.com/omaigo88/iam/pkg/api"
 	"github.com/omaigo88/iam/pkg/repository"
 	"github.com/omaigo88/iam/pkg/service"
+	"github.com/omaigo88/shared/pkg/logger"
+	"github.com/omaigo88/shared/pkg/telemetry"
+	"github.com/omaigo88/shared/pkg/tracing"
 )
 
 const (
 	defaultRedisAddress = "localhost:6379"
 	defaultSessionTTL   = 24 * time.Hour
+	serviceName         = "iam-service"
 )
 
 // Container holds IAMService's constructed dependencies.
 type Container struct {
-	pool  *pgxpool.Pool
-	redis *redis.Client
+	pool      *pgxpool.Pool
+	redis     *redis.Client
+	telemetry []telemetry.ShutdownFunc
 
 	// AuthServer implements authv1.AuthServiceServer.
 	AuthServer *api.AuthServer
@@ -35,7 +41,18 @@ type Container struct {
 // New builds a Container connected to PostgreSQL (DB_URI) and Redis
 // (REDIS_ADDRESS, default localhost:6379). Sessions live for IAM_SESSION_TTL
 // (a Go duration, default 24h).
-func New(ctx context.Context) (*Container, error) {
+func New(ctx context.Context) (_ *Container, err error) {
+	shutdowns, err := telemetry.Init(ctx, serviceName, logger.Init, tracing.InitTracer)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		if err != nil {
+			telemetry.Flush(shutdowns...)
+		}
+	}()
+
 	sessionTTL := defaultSessionTTL
 
 	if raw := os.Getenv("IAM_SESSION_TTL"); raw != "" {
@@ -75,6 +92,7 @@ func New(ctx context.Context) (*Container, error) {
 	return &Container{
 		pool:       pool,
 		redis:      redisClient,
+		telemetry:  shutdowns,
 		AuthServer: api.NewAuthServer(svc),
 		UserServer: api.NewUserServer(svc),
 	}, nil
@@ -84,4 +102,5 @@ func New(ctx context.Context) (*Container, error) {
 func (c *Container) Close() {
 	_ = c.redis.Close()
 	c.pool.Close()
+	telemetry.Flush(c.telemetry...)
 }

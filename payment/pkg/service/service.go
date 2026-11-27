@@ -30,7 +30,7 @@ func NewService() *Service {
 }
 
 // PayOrder validates the payment request and returns a new transaction UUID.
-func (s *Service) PayOrder(_ context.Context, orderUUID string, method paymentv1.PaymentMethod) (string, error) {
+func (s *Service) PayOrder(ctx context.Context, orderUUID string, method paymentv1.PaymentMethod) (string, error) {
 	if orderUUID == "" {
 		return "", ErrEmptyOrderUUID
 	}
@@ -45,7 +45,8 @@ func (s *Service) PayOrder(_ context.Context, orderUUID string, method paymentv1
 
 	transactionUUID := uuid.New()
 
-	slog.Info(
+	slog.InfoContext(
+		ctx,
 		"payment succeeded",
 		"order_uuid", orderUUID,
 		"transaction_uuid", transactionUUID.String(),

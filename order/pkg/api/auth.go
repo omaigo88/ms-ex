@@ -67,7 +67,7 @@ func AuthMiddleware(iam IAMClient) func(http.Handler) http.Handler {
 					return
 				}
 
-				slog.Error("IAM Whoami failed", "error", err)
+				slog.ErrorContext(r.Context(), "IAM Whoami failed", "error", err)
 				writeError(w, http.StatusInternalServerError, "internal server error")
 
 				return
@@ -75,7 +75,7 @@ func AuthMiddleware(iam IAMClient) func(http.Handler) http.Handler {
 
 			userUUID, err := uuid.Parse(resp.GetUserUuid())
 			if err != nil {
-				slog.Error("IAM Whoami returned an invalid user_uuid", "user_uuid", resp.GetUserUuid())
+				slog.ErrorContext(r.Context(), "IAM Whoami returned an invalid user_uuid", "user_uuid", resp.GetUserUuid())
 				writeError(w, http.StatusInternalServerError, "internal server error")
 
 				return

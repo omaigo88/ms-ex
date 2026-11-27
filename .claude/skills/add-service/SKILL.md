@@ -11,6 +11,12 @@ Reference: `assembly/` (added in week 5).
    `go.mod` with `module github.com/omaigo88/<svc>` and
    `replace github.com/omaigo88/shared => ../shared`. `cmd/main.go`:
    `signal.NotifyContext`, build container, run, graceful close.
+1b. **Telemetry** — first thing in `internal/app`:
+   `telemetry.Init(ctx, "<svc>-service", logger.Init, tracing.InitTracer[, metrics.Init])`,
+   `telemetry.Flush` last in `Close`; `otelgrpc` stats handlers on its gRPC
+   server/clients (see `.claude/rules/observability.md`). Compose: add
+   `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SDK_DISABLED` and the optional
+   `otel-collector` dependency; e2e: add the service to the "logs of …" loop.
 2. **Workspace** — add `./<svc>` to `go.work` `use (...)` (keep sorted) and to its TODO comment.
 3. **Taskfile** — add the module to `MODULES`, the `build` and `lint` package
    lists, every `for mod in …` loop (test, test:coverage, coverage merge), and a

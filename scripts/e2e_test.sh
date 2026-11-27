@@ -1,11 +1,13 @@
 #!/bin/bash
 #
-# End-to-end smoke test: brings up the real Docker stack (Order, Inventory,
-# Payment, Assembly, IAM, their Postgres instances, Redis and Kafka, via the
-# single deploy/compose/docker-compose.yaml), applies migrations, registers and
-# logs in a user through IAM (grpcurl), and drives the Order HTTP API with
-# curl as that user — including the async Kafka chain that takes a paid order
-# to ASSEMBLED.
+# End-to-end smoke test: brings up the real Docker stack with observability
+# (`task up-all`: Order, Inventory, Payment, Assembly, IAM, their Postgres
+# instances, Redis, Kafka, and the OTel Collector with Elasticsearch/Kibana,
+# Prometheus/Grafana and Jaeger), applies migrations, registers and logs in a
+# user through IAM (grpcurl), and drives the Order HTTP API with curl as that
+# user — including the async Kafka chain that takes a paid order to ASSEMBLED.
+# Finally it checks that the run's logs, business metrics and distributed
+# traces arrived in Elasticsearch, Prometheus and Jaeger.
 #
 # Usage: scripts/e2e_test.sh
 # (also wired up as `task test:e2e`)
@@ -112,6 +114,21 @@ assert_status() {
 	LAST_BODY="$actual_body"
 }
 
+# poll DESCRIPTION TIMEOUT_SECONDS COMMAND... — PASS once COMMAND succeeds,
+# FAIL if it never does within the timeout (telemetry arrives asynchronously).
+poll() {
+	local desc="$1" timeout="$2"
+	shift 2
+	for _ in $(seq 1 "$timeout"); do
+		if "$@" >/dev/null 2>&1; then
+			echo "PASS: $desc"
+			return 0
+		fi
+		sleep 1
+	done
+	fail "$desc (not within ${timeout}s)"
+}
+
 # assert_contains DESCRIPTION HAYSTACK NEEDLE
 assert_contains() {
 	if [[ "$2" == *"$3"* ]]; then
@@ -121,8 +138,8 @@ assert_contains() {
 	fi
 }
 
-echo "==> Starting the infrastructure (Order, Inventory, Payment, Assembly, IAM, Postgres, Redis, Kafka)..."
-task -d "$REPO_ROOT" up || exit 1
+echo "==> Starting the infrastructure with observability (task up-all)..."
+task -d "$REPO_ROOT" up-all || exit 1
 STACK_UP=1
 
 wait_for_port 50053 IAMService || exit 1
@@ -260,12 +277,54 @@ else
 	fail "Kafka UI on localhost:8090 -> $ui_status"
 fi
 
-# 21: data survives an Order restart (Postgres), and so does the session (Redis)
+# 21-30: observability (asserted here, after the flows above produced telemetry)
+
+# UIs answer
+poll "Kibana on localhost:5601 is available" 180 sh -c "curl -fsS http://localhost:5601/api/status | grep -q '\"level\":\"available\"'"
+poll "Kibana data view otel-logs exists" 60 curl -fsS http://localhost:5601/api/data_views/data_view/otel-logs
+poll "Grafana on localhost:3000 is healthy" 60 sh -c "curl -fsS http://localhost:3000/api/health | grep -q '\"database\": *\"ok\"'"
+poll "Grafana provisioned the Orders dashboard" 30 curl -fsS http://localhost:3000/api/dashboards/uid/orders
+poll "Jaeger UI on localhost:16686 answers" 30 curl -fsS -o /dev/null http://localhost:16686/
+
+# Logs: every service's logs reach the otel-logs data stream
+logs_from() {
+	curl -fsS "http://localhost:9200/otel-logs/_count" -H 'Content-Type: application/json' \
+		-d "{\"query\":{\"term\":{\"resource.attributes.service.name\":\"$1\"}}}" | jq -e '.count > 0'
+}
+for svc in order-service inventory-service payment-service iam-service assembly-service; do
+	poll "logs of $svc in Elasticsearch otel-logs" 60 logs_from "$svc"
+done
+
+# Metrics: business metrics reach Prometheus (pushed every 10s)
+prom_at_least() {
+	curl -fsS -G http://localhost:9090/api/v1/query --data-urlencode "query=sum($1)" |
+		jq -e --argjson min "$2" '(.data.result[0].value[1] // "0" | tonumber) >= $min'
+}
+poll "Prometheus orders_created_total >= 3" 60 prom_at_least orders_created_total 3
+poll "Prometheus orders_paid_total{payment_method=CARD} >= 1" 60 prom_at_least 'orders_paid_total{payment_method="CARD"}' 1
+poll "Prometheus orders_cancelled_total >= 1" 60 prom_at_least orders_cancelled_total 1
+poll "Prometheus orders_assembled_total >= 1" 60 prom_at_least orders_assembled_total 1
+
+# Traces: one create-order trace spans Order -> IAM and Order -> Inventory -> IAM;
+# the pay trace reaches Payment
+trace_spans() {
+	local op="$1"
+	shift
+	curl -fsS -G "http://localhost:16686/api/traces" --data-urlencode service=order-service \
+		--data-urlencode "operation=$op" --data-urlencode limit=20 |
+		jq -e --args '[.data[] | [.processes[].serviceName] | unique] | any(. as $s | ($ARGS.positional | all(. as $want | $s | index($want))))' "$@"
+}
+poll "Jaeger trace of POST /api/v1/orders spans order, iam, inventory" 60 \
+	trace_spans "POST /api/v1/orders" order-service iam-service inventory-service
+poll "Jaeger trace of POST /api/v1/orders/{order_uuid}/pay spans order, iam, payment" 60 \
+	trace_spans "POST /api/v1/orders/{order_uuid}/pay" order-service iam-service payment-service
+
+# 31: data survives an Order restart (Postgres), and so does the session (Redis)
 docker restart ms-ex-order-1 >/dev/null 2>&1
 wait_for_port 8080 OrderService || exit 1
 assert_status GET "/api/v1/orders/$ORDER1" "" 200 '"status":"ASSEMBLED"'
 
-# 22: logout deletes the session — the same token is rejected afterwards
+# 32: logout deletes the session — the same token is rejected afterwards
 grpc iam:50053 auth.v1.AuthService/Logout "{\"session_uuid\":\"$SESSION\"}" >/dev/null
 exists=$(docker exec ms-ex-redis-1 redis-cli EXISTS "session:$SESSION" | tr -d '\r')
 if [ "$exists" = "0" ]; then echo "PASS: Logout removed session:{uuid} from Redis"; else fail "session still in Redis after Logout"; fi

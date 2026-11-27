@@ -11,6 +11,8 @@ import (
 	assemblykafka "github.com/omaigo88/assembly/pkg/kafka"
 	"github.com/omaigo88/assembly/pkg/service"
 	sharedkafka "github.com/omaigo88/shared/pkg/kafka"
+	"github.com/omaigo88/shared/pkg/logger"
+	"github.com/omaigo88/shared/pkg/telemetry"
 )
 
 const (
@@ -19,20 +21,34 @@ const (
 	defaultMaxBuildDelay = 15 * time.Second
 
 	consumerGroupID = "assembly-service"
+	serviceName     = "assembly-service"
 )
 
 // Container holds AssemblyService's constructed dependencies.
 type Container struct {
-	producer *sharedkafka.Producer
-	consumer *sharedkafka.Consumer
-	handler  sharedkafka.Handler
+	telemetry []telemetry.ShutdownFunc
+	producer  *sharedkafka.Producer
+	consumer  *sharedkafka.Consumer
+	handler   sharedkafka.Handler
 }
 
 // New builds a Container connected to Kafka (KAFKA_BROKERS, defaulting to
 // localhost:9094). Each assembly takes a random time between
 // ASSEMBLY_BUILD_DELAY_MIN and ASSEMBLY_BUILD_DELAY_MAX (Go durations,
 // default 5s and 15s).
-func New() (*Container, error) {
+func New(ctx context.Context) (_ *Container, err error) {
+	// Logs only: the assembly path is outside the traced create-order flow.
+	shutdowns, err := telemetry.Init(ctx, serviceName, logger.Init)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		if err != nil {
+			telemetry.Flush(shutdowns...)
+		}
+	}()
+
 	minBuildDelay, err := durationEnv("ASSEMBLY_BUILD_DELAY_MIN", defaultMinBuildDelay)
 	if err != nil {
 		return nil, err
@@ -63,9 +79,10 @@ func New() (*Container, error) {
 	}
 
 	return &Container{
-		producer: producer,
-		consumer: consumer,
-		handler:  assemblykafka.OrderPaidHandler(service.NewAssembler(minBuildDelay, maxBuildDelay), producer),
+		telemetry: shutdowns,
+		producer:  producer,
+		consumer:  consumer,
+		handler:   assemblykafka.OrderPaidHandler(service.NewAssembler(minBuildDelay, maxBuildDelay), producer),
 	}, nil
 }
 
@@ -78,6 +95,7 @@ func (c *Container) Run(ctx context.Context) error {
 func (c *Container) Close() {
 	_ = c.consumer.Close()
 	_ = c.producer.Close()
+	telemetry.Flush(c.telemetry...)
 }
 
 // durationEnv reads a Go duration from the environment variable key, falling

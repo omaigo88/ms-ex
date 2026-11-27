@@ -23,6 +23,8 @@ architectural change is not done until the doc matches the code.
 - Deployment topology: Compose services, infrastructure components, public
   ports, how services find each other.
 - Error contract: a new error that maps to a distinct HTTP/gRPC status.
+- Observability: a new telemetry signal, business metric, backend, or a
+  change to what is traced/propagated.
 - A known limitation is introduced or removed.
 
 Pure refactors inside a layer, test-only changes, and dependency bumps do not
@@ -32,7 +34,8 @@ need a doc update.
 
 - Edit the affected sections only; keep the existing structure: overview →
   component diagram → authentication → order lifecycle → event flow (+ events table, delivery
-  semantics) → create/cancel → transactions and concurrency → deployment →
+  semantics) → create/cancel → transactions and concurrency → observability →
+  deployment →
   error mapping → known limitations.
 - Diagrams are Mermaid in the markdown — update the diagram *and* the prose/tables
   around it. Every name in a diagram (service, rpc, topic, status, table) must

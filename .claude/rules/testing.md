@@ -30,12 +30,14 @@ Three levels; a change usually touches the first two, sometimes the third.
    Bearer token, `anonClient` sends none; `inventoryClient` calls Inventory
    with the session in metadata. The async chain is exercised by calling
    `orderSvc.MarkAssembled` directly (no session, like the Kafka consumer).
-3. **E2E** (`task test:e2e`, `scripts/e2e_test.sh`) — full Docker stack, real
-   Postgres + Redis + Kafka, curl + jq + psql + grpcurl (run as a container
+3. **E2E** (`task test:e2e`, `scripts/e2e_test.sh`) — full Docker stack via
+   `task up-all` (incl. observability), real Postgres + Redis + Kafka, curl + jq + psql + grpcurl (run as a container
    on the compose network — no host install). Brings the stack up and tears it down.
    - JSON bodies with commas go into variables before `"$(...)"` — inline they
      get brace-expanded.
-   - Async assertions poll with a timeout; never `sleep N` and hope.
+   - Async assertions poll with a timeout (`poll DESC SECONDS CMD...`); never
+     `sleep N` and hope. Telemetry checks (ES `_count`, Prometheus query,
+     Jaeger `/api/traces`) are polls too — export is batched.
    - Assert on status code always; on body substrings only when the message is a
      stable sentinel.
    - Number new scenarios and keep the header comment accurate.

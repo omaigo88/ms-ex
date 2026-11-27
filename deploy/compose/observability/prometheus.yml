@@ -1,0 +1,10 @@
+# Prometheus only receives metrics: the OTel Collector pushes them via remote
+# write (--web.enable-remote-write-receiver). Nothing is scraped except
+# Prometheus itself.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
